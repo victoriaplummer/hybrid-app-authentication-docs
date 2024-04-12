@@ -2,243 +2,479 @@ import { Demo } from "../components/demo"
 
 <CH.Scrollycoding>
 
-# Prebuilt Checkout page
-
-<CH.Preview frameless>
-
-<Demo />
-
-</CH.Preview>
+# Building a Secure Connection for Hybrid Apps
 
 <CH.Code>
 
-```rb server.rb
-require 'stripe'
-require 'sinatra'
+```javascript jwt.js
+const jwt = require('jsonwebtoken')
+const db = require('./database.js')
 
-# This is a public sample test API key.
-# Don’t submit any personal information in requests made with this key.
-# Sign in to see your own test API key embedded in code samples.
-Stripe.api_key = 'sk_test_CGGvfNiIPwLXiDwaOfZ3oX6Y'
+const createSessionToken = (user) => {
+    const sessionToken = jwt.sign({ user }, process.env.WEBFLOW_CLIENT_SECRET, { expiresIn: '24h' }); // Example expiration time of 1 hour}
+    return sessionToken
+}
+// Middleware to authenticate and validate JWT, and fetch the decrypted access token
+const authenticateToken = (req, res, next) => {
+    const authHeader = req.headers.authorization;
+    const token = authHeader && authHeader.split(' ')[1]; // Extract the token from 'Bearer <token>'
+    if (!token) {
+        return res.status(401).json({ message: 'Authentication token is missing' });
+    }
 
-set :static, true
-set :port, 4242
+    // Verify the Token
+    jwt.verify(token, process.env.WEBFLOW_CLIENT_SECRET, (err, user) => {
+        if (err) {
+            return res.status(403).json({ message: 'Invalid or expired token' });
+        }
 
-YOUR_DOMAIN = 'http://localhost:4242'
+        // Use the user details to fetch the access token from the database
+        db.getAccessToken(user.user, (error, accessToken) => {
 
-post '/create-checkout-session' do
-  content_type 'application/json'
+            if (error) {
+                return res.status(500).json({ error: 'Failed to retrieve access token' });
+            }
+            // Attach  access token in the request object so that you can make an authenticated request to Webflow
+            req.accessToken = accessToken;
 
-  session = Stripe::Checkout::Session.create({
-    line_items: [{
-      # Provide the exact Price ID (e.g. pr_1234) of the product
-      price: '{{PRICE_ID}}',
-      quantity: 1,
-    }],
-    mode: 'payment',
-    success_url: YOUR_DOMAIN + '/success.html',
-    cancel_url: YOUR_DOMAIN + '/cancel.html',
-  })
-  redirect session.url, 303
-end
+            next(); // Proceed to next middleware or route handler
+        });
+    });
+};
+
+module.exports = {
+    createSessionToken,
+    authenticateToken
+}
 ```
 
-{/* prettier-ignore */}
-```html checkout.html
-<!DOCTYPE html>
-<html>
-  <head>
-    <title>Buy cool new product</title>
-    <link rel="stylesheet" href="style.css">
-    <script src="https://polyfill.io/v3/polyfill.min.js?version=3.52.1&features=fetch"></script>
-    <script src="https://js.stripe.com/v3/"></script>
-  </head>
-  <body>
-    <section>
-      <div class="product">
-        <img 
-          src="https://i.imgur.com/EHyR2nP.png" 
-          alt="The cover of Stubborn Attachments" 
-        />
-        <div class="description">
-          <h3>Stubborn Attachments</h3>
-          <h5>$20.00</h5>
-        </div>
+```javascript server.js
+const express = require("express");
+const cors = require("cors");
+const { WebflowClient } = require("webflow-api");
+const axios = require("axios");
+require("dotenv").config();
+
+const app = express(); // Create an Express application
+const db = require("./database.js"); // Load DB Logic
+const jwt = require("./jwt.js")
+
+var corsOptions = { origin: ["http://localhost:1337"] };
+
+// Middleware
+app.use(cors(corsOptions)); // Enable CORS with the specified options
+app.use(express.json()); // Parse JSON-formatted incoming requests
+app.use(express.urlencoded({ extended: true })); // Parse URL-encoded incoming requests with extended syntax
+
+// Redirect user to Webflow Authorization screen
+app.get("/authorize", (req, res) => {
+
+    const authorizeUrl = WebflowClient.authorizeURL({
+        scope: ["sites:read","authorized_user:read"],
+        clientId: process.env.WEBFLOW_CLIENT_ID,
+    })
+    res.redirect(authorizeUrl)
+})
+
+// Optional: Redirect root to Webflow Authorization screen
+app.get("/", (req,res) =>{
+    res.redirect("/authorize")
+})
+
+// Exchange the authorization code for an access token and save to DB
+app.get("/callback", async (req, res) => {
+  const { code } = req.query;
+
+  // Get Access Token
+  const accessToken = await WebflowClient.getAccessToken({
+    clientId: process.env.WEBFLOW_CLIENT_ID,
+    clientSecret: process.env.WEBFLOW_CLIENT_SECRET,
+    code: code,
+  });
+
+  // Instantiate the Webflow Client
+  const webflow = new WebflowClient({ accessToken });
+
+  // Get Authorization Details
+  const user = await webflow.token.authorizedBy();
+  user.accessToken = accessToken; // add access token to user object
+
+  // Save User Details to DB
+  db.insertAuthorization(user);
+});
+
+// Authenticate Designer Extension User via ID Token
+app.post("/token", async (req, res) => {
+  const token = req.body.idToken; // Get token from request
+
+  // Resolve Session token by makeing a Request to Webflow API
+  const APP_TOKEN = process.env.APP_TOKEN;
+  const options = {
+    method: "POST",
+    url: "https://api.webflow.com/beta/token/resolve",
+    headers: {
+      accept: "application/json",
+      "content-type": "application/json",
+      authorization: `Bearer ${process.env.APP_TOKEN}`,
+    },
+    data: {
+      idToken: token,
+    },
+  };
+  const request = await axios.request(options);
+  const user = request.data;
+
+  // Generate a Session Token
+  const sessionToken = jwt.createSessionToken(user)
+
+  // Respond to user with sesion token
+  res.json({ sessionToken });
+});
+
+// Make authenticated request with user's session token
+app.get("/sites", jwt.authenticateToken ,async (req, res) => {
+  
+  try {
+    // Initialize Webflow Client and make request to sites endpoint
+    const accessToken = req.accessToken
+    const webflow = new WebflowClient({ accessToken });
+    const data = await webflow.sites.list();
+    console.log(accessToken)
+    // Send the retrieved data back to the client
+    res.json({ data });
+  } catch (error) {
+    console.error("Error handling authenticated request:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Start the server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Server is running on http://localhost:${PORT}`);
+});
+```
+
+```jsx main.js
+import React, { useState, useEffect } from "react";
+import ReactDOM from "react-dom/client";
+import axios from "axios";
+import DataTable from "./DataTable";
+import { ThemeProvider, Button, Container, Typography } from "@mui/material";
+import theme from './theme'
+
+const App = () => {
+  const [idToken, setIdToken] = useState("");
+  const [sessionToken, setSessionToken] = useState("");
+  const [user, setUser] = useState({});
+  const [siteData, setSiteData] = useState([]);
+
+  const PORT = 3000;
+  const API_URL = `http://localhost:${PORT}/`;
+
+  useEffect(() => {
+    // Set Extension Size
+    webflow.setExtensionSize("default");
+
+    // Fetch ID Token and send it to the Data Client
+    const exchangeAndVerifyIdToken = async () => {
+      try {
+        // Get ID Token from Webflow
+        const idToken = await webflow.getIdToken();
+        setIdToken(idToken);
+
+        console.log(`idToken: ${idToken}`);
+
+        // Send token to Webflow, and wait for a response with a JWT from our Data Client
+        const getSessionToken = async (idToken) => {
+
+          // Send ID Token to the Data Client
+            const response = await axios.post(API_URL + "token", {
+              idToken: idToken,
+            });
+
+            try {
+              // Store sessionToken in Local Storage
+              const sessionToken = response.data.sessionToken;
+
+              // Decode the sessionToken
+              const decodedToken = JSON.parse(atob(sessionToken.split(".")[1]));
+              const firstName = decodedToken.user.firstName;
+              const email = decodedToken.user.email;
+
+              localStorage.setItem(
+                "user",
+                JSON.stringify({
+                  sessionToken: sessionToken,
+                  firstName: firstName,
+                  email: email,
+                })
+              );
+              setUser({ firstName, email });
+              setSessionToken(sessionToken);
+              console.log(`Session Token: ${sessionToken}`);
+            } catch (error) {
+              console.error("No Token", error);
+            }
+        };
+        await getSessionToken(idToken);
+      } catch (error) {
+        console.error("Error fetching ID Token:", error);
+      }
+    };
+
+  // Run function
+  exchangeAndVerifyIdToken();
+  }, []);
+
+  // Handle request for site data
+  const getSiteData = async () => {
+    const sites = await axios.get(API_URL + "sites", {
+      headers: { authorization: `Bearer ${sessionToken}` },
+    });
+    setSiteData(sites.data.data.sites);
+  };
+
+  return (
+    <ThemeProvider theme={theme}>
+      <div>
+      <Container sx={{padding:'20px'}}>
+        <Typography variant="h1">👋🏾 Hello {user.firstName}</Typography>
+        <Button variant="contained" sx={{ margin: '10px 20px' }} onClick={getSiteData}>Get Sites</Button>
+        {siteData.length > 0 && <DataTable data={siteData} />}
+        </Container>
       </div>
-      <form action="/create-checkout-session" method="POST">
-        <button type="submit" id="checkout-button">Checkout</button>
-      </form>
-    </section>
-  </body>
-</html>
+    </ThemeProvider>
+  );
+};
+
+// Render your App component inside the root
+const rootElement = document.getElementById("root");
+const root = ReactDOM.createRoot(rootElement);
+
+root.render(<App />);
 ```
 
-{/* prettier-ignore */}
-```html success.html
-<!DOCTYPE html>
-<html>
-<head>
-  <title>Thanks for your order!</title>
-  <link rel="stylesheet" href="style.css">
-</head>
-<body>
-  <section>
-    <p>
-      We appreciate your business! 
-      If you have any questions, please email
-      <a href="mailto:orders@example.com">orders@example.com</a>.
-    </p>
-  </section>
-</body>
-</html>
+```javascript database.js
+const jwt = require('jsonwebtoken')
+const db = require('./database.js')
+
+const createSessionToken = (user) => {
+    const sessionToken = jwt.sign({ user }, process.env.WEBFLOW_CLIENT_SECRET, { expiresIn: '24h' }); // Example expiration time of 1 hour}
+    return sessionToken
+}
+// Middleware to authenticate and validate JWT, and fetch the decrypted access token
+const authenticateToken = (req, res, next) => {
+    const authHeader = req.headers.authorization;
+    const token = authHeader && authHeader.split(' ')[1]; // Extract the token from 'Bearer <token>'
+    if (!token) {
+        return res.status(401).json({ message: 'Authentication token is missing' });
+    }
+
+    // Verify the Token
+    jwt.verify(token, process.env.WEBFLOW_CLIENT_SECRET, (err, user) => {
+        if (err) {
+            return res.status(403).json({ message: 'Invalid or expired token' });
+        }
+
+        // Use the user details to fetch the access token from the database
+        db.getAccessToken(user.user, (error, accessToken) => {
+
+            if (error) {
+                return res.status(500).json({ error: 'Failed to retrieve access token' });
+            }
+            // Attach  access token in the request object so that you can make an authenticated request to Webflow
+            req.accessToken = accessToken;
+
+            next(); // Proceed to next middleware or route handler
+        });
+    });
+};
+
+module.exports = {
+    createSessionToken,
+    authenticateToken
+}
 ```
 
-{/* prettier-ignore */}
-```html cancel.html
-<!DOCTYPE html>
-<html>
-<head>
-  <title>Checkout canceled</title>
-  <link rel="stylesheet" href="style.css">
-</head>
-<body>
-  <section>
-    <p>Forgot to add something to your cart? Shop around then come back to pay!</p>
-  </section>
-</body>
-</html>
-```
 
 </CH.Code>
 
-Explore a full, working code sample of an integration with [Stripe Checkout](https://stripe.com/docs/payments/checkout). The client- and server-side code redirects to a prebuilt payment page hosted on Stripe.
+Learn how to establish a secure connection between your Designer Extension and Data Client. The provided client- and server- side code uses [JSON Web Tokens (JWTs)](http://jwt.io) to make authenticated requests without compromising client credentials. Before you get started, make sure your App is configured to use both the Data Extension and Data Client capabilities.
 
-Before you get started, confirm the payment methods you want to offer in your [payment method settings](https://dashboard.stripe.com/settings/payment_methods). We enable cards and other common payment methods for you by default, and we recommend that you enable additional payment methods that are relevant for your business and customers.
+In this tutorial we’ll build a Hybrid App that:
+- Generates and resolves a user’s ID Token for authentication
+- Creates a session token (JWT)  from user data
+- Makes authenticated requests to Webflow’s Data APIs.
+
+<button><a href="https://github.com/victoriaplummer/Hybrid-App-Authentication-w.-ID-tokens">Download Full App</a></button>
+
+### Prerequisites
+Make sure you have a Hybrid App with the `sites:read` and `authorized_user:read` scopes, as well as a bearer key generated from your app to use an App token. Additionally, you should have basic knowledge of Node.js and Express and familiarity with building React Single-Page Applications.
 
 ---
 
-## Set up the server
+## Set you your development environment
 
-### Install the Stripe Ruby library
+### Clone the starter code
 
-```rb server.rb focus=4:7 mark=4:7
+We've pre-configured a Designer Extension and Data Client using our templates designed to give you a solid foundation. In this tutorial, you will be guided through adding specific code examples. If you are curious about the final app or need a reference, you can download the complete App here. 
+
+<button><a href="https://github.com/victoriaplummer/Hybrid-App-Authentication-w.-ID-tokens">Download Starter Code</a></button>
+
+
+---
+
+### Install dependencies and add environment variables
+
+Install the necessary dependencies, and configure environment variables for your App’s Client ID and secret. 
+`npm install`
+
+---
+
+## Add JWT Middleware
+
+### Add logic for minting session tokens
+
+```javascript jwt.js focus=4:8 mark=4:8
 
 ```
 
-Install the Stripe ruby gem and require it in your code. Alternatively, if you’re starting from scratch and need a Gemfile, download the project files using the link in the code editor.
+Add the `jsonwebtoken` package to handle token generation and verification, as well as the database module to access user information. Then, create a function to mint a session token using your client secret.
 
 ---
 
-### Create a Checkout Session
+### Establish request verification for protected endpoints
 
-Add an endpoint on your server that creates a [Checkout Session](https://stripe.com/docs/api/checkout/sessions). A Checkout Session controls what your customer sees on the payment page such as line items, the order amount and currency, and acceptable payment methods. We enable cards and other common payment methods for you by default, and you can enable or disable payment methods directly in the [Stripe Dashboard](https://dashboard.stripe.com/settings/payment_methods).
-
-```rb server.rb focus=17:27 mark=17:27
+```javascript jwt.js focus=9:34 mark=9:34
 
 ```
 
+Create a middleware function that verifies incoming requests by retrieving the `sessionToken` from a request’s authorization header and verifying it. Once verified, search for a user’s `accessToken` in the database, and return it to use in authenticated requests.
+
 ---
 
-### Define a product to sell
+## Set up the Data Client
 
-```rb server.rb focus=18:22 mark=18:22
+### Configure authorization flow
+
+```javascript server.js focus=18:53 mark=18:53
 
 ```
 
-Always keep sensitive information about your product inventory, such as price and availability, on your server to prevent customer manipulation from the client. Define product information when you create the Checkout Session using [predefined price IDs](https://stripe.com/docs/payments/accept-a-payment?platform=web&ui=checkout#create-product-prices-upfront) or on the fly with [price_data](https://stripe.com/docs/api/checkout/sessions/create#create_checkout_session-line_items-price_data).
+Add an endpoint on your server that retrieves an `authorization_code` from your OAuth callback URI. Use the code in the URI’s query parameter to request an `accessToken` for your user. Instantiate the Webflow client, and send a request to get your user’s details. Save the user details and `accessToken` to the database.
 
 ---
 
-### Choose the mode
+### Get user details from an ID token
 
-```rb server.rb focus=23 mark=23
+```javascript server.js focus=56:81 mark=56:81
 
 ```
 
-Checkout has three modes: `payment`, `subscription`, or `setup`. Use `payment` mode for one-time purchases. Learn more about [subscription](https://stripe.com/docs/billing/subscriptions/build-subscriptions) and [setup](https://stripe.com/docs/payments/save-and-reuse?platform=checkout) modes in the docs.
+Create an endpoint on your server that accepts an `idToken`. Within this endpoint, send a request to Webflow’s resolve token endpoint, which will return details about the user that requested the `idToken`.
+Use these details to query the database for an authorized user. Be sure to authenticate the resolve token request with your `appToken` and include the `idToken` in the request body.
 
 ---
 
-### Supply success and cancel URLs
+### Mint a session token and return it to the Designer Extension
 
-```rb server.rb focus=24:25 mark=24:25
+```javascript server.js focus=77 mark=77
 
 ```
 
-Specify URLs for success and cancel pages—make sure they’re publicly accessible so Stripe can redirect customers to them. You can also handle both the success and canceled states with the same URL.
+Within the same endpoint, use the JWT middleware to mint a `sessionToken` from the user data. Once generated, return the `sessionToken` to complete the Designer Extension authentication process.
 
 ---
 
-### Redirect to Checkout
+### Create a protected endpoint for authenticated Webflow requests
 
-```rb server.rb focus=27 mark=27
+```javascript server.js focus=83:98 mark=83:98
 
 ```
 
-After creating the session, redirect your customer to the URL for the Checkout page returned in the response.
+To facilitate requests for Webflow data from the Designer Extension, create an endpoint that uses the JWT middleware to verify the `sessionToken` and return an `accessToken`. Make an authenticated request to Webflow with the `accessToken` and return the data in the response.
 
 ---
+## Set up the Designer Extension
 
-## Build your checkout
+### Create a request for an ID Token
 
-### Add a success page
-
-```html success.html focus=7:15 mark=7:15
+```jsx main.js focus=22:28 mark=22:28
 
 ```
 
-Create a success page for the URL you provided as the Checkout Session success_url to display order confirmation messaging or order details to your customer. Stripe redirects to this page after the customer successfully completes the checkout.
+To initiate user authentication, call the `webflow.requestIdToken()` function. This retrieves an `idToken` for the active user, which is essential for verifying the user's identity. It’s important to note that the `idToken` is only valid for 15 minutes, so it should be used promptly.
 
 ---
 
-### Add a canceled page
+### Create a request for `sessionToken` and save in Local Storage
 
-```html cancel.html focus=7:11 mark=7:11
+```jsx main.js focus=31:60 mark=31:60
 
 ```
 
-Add another page for `cancel_url`. Stripe redirects to this page when the customer clicks the back button in Checkout.
+Send the `idToken` in the body of a POST request to the “/token” endpoint of the Data Client. Upon successful request, the endpoint returns a `sessionToken`. Decode the session token to get user details like `firstName`, `email` , and `sessionToken` and set their respective state variables. Store the `sessionToken` in local storage to maintain user session state across the application. 
 
 ---
 
-### Add an order preview page
+### Call the entire Function
+```jsx main.js focus=69 mark=69
 
-```html checkout.html focus=11:20 mark=11:20
+```
+---
+
+### Get Webflow data via an authenticated request
+```jsx main.js focus=73:78 mark=73:78
 
 ```
 
-Finally, add a page to show a preview of the customer’s order. Allow them to review or modify their order—as soon as they’re sent to the Checkout page, the order is final and they can’t modify it without creating a new Checkout Session.
+Create a request to the Data Client’s “/sites” endpoint to access Webflow site data. Authenticate the request by including the sessionToken as a bearer token in the Authorization header. Set a siteData state variable to the data from the response.
 
 ---
+## Personalize the UI
 
-### Add a checkout button
-
-```html checkout.html focus=21:23 mark=21:23
+### Build initial user greeting
+```jsx main.js focus=84 mark=84
 
 ```
 
-Add a button to your order preview page. When your customer clicks this button, they’re redirected to the Stripe-hosted payment page.
+Create a section in your Designer Extension that dynamically greets the user, such as "Hello, `firstName`," using the user's first name obtained from the`sessionToken`. This greeting should update seamlessly without requiring a page reload.
 
 ---
+### Create a button to request site data
+```jsx main.js focus=85 mark=85
+
+```
+
+Add a button labeled "Get Site Data." pass the `getSiteData` handler to the button's `onClick` prop, so it will trigger a fetch request to the Data Client’s “/sites” endpoint when clicked.
+
+---
+### List retrievd site data
+```jsx main.js focus=86 mark=86
+
+```
+
+To render a list of sites, use the TableData component to dynamically list the site data once it is retrieved, and pass the siteData state variable as prop. 
 
 ## Congratulations!
 
-You have a basic Checkout integration working. Learn how to customize the appearance of your checkout page.
+You have a working Hybrid app that can securely make requests to Webflow’s Data APIs. 
 
 ## Next steps
 
-#### [Fulfillment](https://stripe.com/docs/payments/checkout/fulfill-orders)
+#### [TBD](https://stripe.com/docs/payments/checkout/fulfill-orders)
 
-Set up a webhook to fulfill orders after a payment succeeds. Webhooks are the most reliable way to handle business-critical events.
+tktk
 
-#### [Payouts](https://stripe.com/docs/payouts)
+#### [TBD](https://stripe.com/docs/payouts)
 
-Learn how to move funds out of your Stripe account into your bank account.
+tktk
 
-#### [Refunds](https://stripe.com/docs/refunds)
+#### [TBD](https://stripe.com/docs/refunds)
 
-Handle requests for refunds by using the Stripe API or Dashboard.
+tktk
 
 </CH.Scrollycoding>
 
-<div style={{ height: 99 }} />
+<div style={{ height: 140 }} />

@@ -8,7 +8,7 @@ export function Demo() {
         height: "100%"
       }}
     >
-      <section
+      {/* <section
         style={{
           background: "white",
           borderRadius: 6,
@@ -67,7 +67,7 @@ export function Demo() {
         >
           Checkout
         </button>
-      </section>
+      </section> */}
     </div>
   )
 }
