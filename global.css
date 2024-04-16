@@ -1055,6 +1055,30 @@ samp:lang(zh-Hans) {
   font-family: var(--sail-font-family-monospace-zh-Hans);
 }
 
+.code-container {
+  position: relative;
+  padding: 10px;
+  border: 1px solid var(--sail-color-background-gray);
+  border-radius: 4px;
+  display: inline-block; /* To ensure the container only takes the width necessary for the code */
+  background-color: #fff;
+  margin-right: 50px;
+}
+
+.code-container code {
+  display: inline-flex; /* Ensure the <code> block takes up the full width of the container */
+  padding: 0px 10px;
+  background-color: inherit;
+}
+
+.copy-button {
+  font-size: .5em;
+  top: 5px;
+  right: 5px;
+  padding: 5px;
+  display: inline-flex;
+}
+
 body,
 button,
 html,
