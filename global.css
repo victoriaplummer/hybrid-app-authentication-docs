@@ -88,11 +88,15 @@ abbr[title] {
 }
 
 h1,
-h2,
 h3,
 h4 {
   color: rgb(26, 31, 54);
 }
+
+h2{
+  color: rgba(20, 110, 245, 1) ;
+}
+
 h3,
 h4 {
   font-weight: 600;
@@ -1099,7 +1103,7 @@ html:lang(zh-Hans) {
 }
 
 a {
-  color: var(--sail-color-blue-500);
+  color:  #146EF5;
   font-weight: 500;
   text-decoration: none;
 }

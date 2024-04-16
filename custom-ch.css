@@ -17,8 +17,8 @@ body {
 }
 
 .ch-scrollycoding-step-content[data-selected] {
-  border-color: var(--sail-color-blue-400);
-  background-color: var(--sail-color-gray-50);
+  border-color: rgba(20, 110, 245, 1)  ;
+  background-color: rgba(240, 240, 240, 1);
 }
 
 .ch-scrollycoding-step-content:first-child,
@@ -35,18 +35,6 @@ body {
 .ch-code-multiline-mark-border {
   background: none !important;
 }
-
-/* .ch-scrollycoding-sticker {
-  flex-flow: column-reverse;
-  gap: 0 !important;
-  background: var(--sail-color-blue-800);
-  border-radius: 4px;
-}
-
-.ch-scrollycoding-preview {
-  box-shadow: inset 0 -1px var(--sail-color-line-divider-dark);
-  border-radius: 0;
-} */
 
 .ch-frame-buttons {
   display: none;
