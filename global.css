@@ -75,6 +75,7 @@ template {
 
 a {
   background-color: transparent;
+  color: #146EF5;
 }
 
 a:active,
@@ -187,7 +188,21 @@ textarea {
 }
 
 button {
-  overflow: visible;
+  border-radius: 5px;
+  border: 0px;
+  padding: 10px;
+  color: #fff !important;
+  background: #146EF5 !important;
+  transition: background 0.2s, color 0.2s, box-shadow 0.2s;
+}
+
+button a {
+  color: #fff !important;
+}
+
+button:hover{
+  color: #fff !important;
+  background: #0055d4 !important;
 }
 
 button,
@@ -266,6 +281,10 @@ table {
 td,
 th {
   padding: 0;
+}
+
+li {
+  padding: 5px 0px;
 }
 
 :root {
@@ -1016,7 +1035,10 @@ samp {
 }
 
 code {
+  background-color: #f6f8fa;
   color: inherit;
+  border-radius: 3px;
+  padding: .2em .4em;
 }
 
 code:lang(ja-JP),
