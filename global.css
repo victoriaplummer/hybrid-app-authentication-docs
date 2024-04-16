@@ -201,12 +201,12 @@ button {
 }
 
 button a {
-  color: #fff !important;
+  color: #fff;
 }
 
 button:hover{
-  color: #fff !important;
-  background: #0055d4 !important;
+  color: #fff;
+  background: #0055d4;
 }
 
 button,
@@ -1061,18 +1061,20 @@ samp:lang(zh-Hans) {
 
 .code-container {
   position: relative;
-  padding: 10px;
+  padding: 15px;
   border: 1px solid #146EF5;
   border-radius: 4px;
   display: flex;
+  flex-flow:nowrap;
   background-color: #fff;
   margin-right: 50px;
 }
 
 .code-container code {
   display: inline-flex;
-  padding: 0px 10px;
+  padding: 0px;
   background-color: inherit;
+  flex: 1;
 }
 
 .copy-button {
@@ -1080,8 +1082,13 @@ samp:lang(zh-Hans) {
   color: #146EF5;
   margin-left:auto;
   font-size: .5em;
-  padding: 5px;
+  padding: 0;
   display: inline-flex;
+}
+
+.copy-button:hover{
+  background-color: initial;
+  color: initial;
 }
 
 body,

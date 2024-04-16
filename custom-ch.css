@@ -21,6 +21,10 @@ body {
   background-color: rgba(240, 240, 240, 1);
 }
 
+.ch-scrollycoding-step-content[data-selected] code{
+  background-color: rgba(216, 216, 216, 1);
+}
+
 .ch-scrollycoding-step-content:first-child,
 .ch-scrollycoding-step-content:last-child {
   background-color: unset !important;
