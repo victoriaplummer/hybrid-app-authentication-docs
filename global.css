@@ -191,8 +191,8 @@ button {
   border-radius: 5px;
   border: 0px;
   padding: 10px;
-  color: #fff !important;
-  background: #146EF5 !important;
+  color: #fff;
+  background: #146EF5;
   transition: background 0.2s, color 0.2s, box-shadow 0.2s;
 }
 
@@ -1058,23 +1058,24 @@ samp:lang(zh-Hans) {
 .code-container {
   position: relative;
   padding: 10px;
-  border: 1px solid var(--sail-color-background-gray);
+  border: 1px solid #146EF5;
   border-radius: 4px;
-  display: inline-block; /* To ensure the container only takes the width necessary for the code */
+  display: flex;
   background-color: #fff;
   margin-right: 50px;
 }
 
 .code-container code {
-  display: inline-flex; /* Ensure the <code> block takes up the full width of the container */
+  display: inline-flex;
   padding: 0px 10px;
   background-color: inherit;
 }
 
 .copy-button {
+  background-color: inherit;
+  color: #146EF5;
+  margin-left:auto;
   font-size: .5em;
-  top: 5px;
-  right: 5px;
   padding: 5px;
   display: inline-flex;
 }
