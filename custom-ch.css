@@ -7,6 +7,10 @@ body {
   gap: 0;
 }
 
+.ch-scrollycoding-sticker {
+  top: 0vh;
+}
+
 .ch-scrollycoding-step-content {
   border-radius: 0;
   padding: 24px;
