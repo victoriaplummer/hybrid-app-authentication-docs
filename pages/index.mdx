@@ -299,7 +299,7 @@ module.exports = {
 
 </CH.Code>
 
-Learn how to establish a secure connection between your Designer Extension and Data Client. The provided client- and server- side code uses [JSON Web Tokens (JWTs)](http://jwt.io) to make authenticated requests without compromising client credentials. Before you get started, make sure your App is configured to use both the Data Extension and Data Client capabilities.
+Learn how to establish a secure connection between your Designer Extension and Data Client. The provided client- and server- side code uses [JSON Web Tokens (JWTs)](http://jwt.io) to make authenticated requests without compromising client credentials.
 
 In this tutorial we’ll build a Hybrid App that:
 - Generates and resolves a user’s ID Token for authentication
@@ -309,7 +309,11 @@ In this tutorial we’ll build a Hybrid App that:
 <button><a href="https://github.com/Webflow-Examples/Hybrid-App-Authentication" target="_blank">Download Full App</a></button>
 
 ### Prerequisites
-Make sure you have a Hybrid App with the `sites:read` and `authorized_user:read` scopes, as well as a bearer key generated from your app to use an App token. Additionally, you should have basic knowledge of Node.js and Express and familiarity with building React Single-Page Applications.
+- A [Hybrid App](https://docs.developers.webflow.com/data/docs/register-an-app) with the `sites:read` and `authorized_user:read` [scopes](https://docs.developers.webflow.com/data/reference/scopes)
+- The `CLIENT_ID` and `CLIENT_SECRET` for your App
+- A bearer key generated from your app to use an App token
+- An [ngrok](https://ngrok.com/) authentication token
+- Basic knowledge of Node.js and Express and familiarity with building React Single-Page Applications
 
 ---
 
