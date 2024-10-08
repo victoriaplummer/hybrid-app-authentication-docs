@@ -1,6 +1,6 @@
 body {
   --ch-scrollycoding-sticker-width: 600px;
-  --ch-scrollycoding-code-min-height: 120vh;
+  --ch-scrollycoding-code-min-height: 100vh;
 }
 
 .ch-scrollycoding {
@@ -8,7 +8,7 @@ body {
 }
 
 .ch-scrollycoding-sticker {
-  top: 0vh;
+  top: 10vh;
 }
 
 .ch-scrollycoding-step-content {
