@@ -529,12 +529,17 @@ export default {
 Securely connect your browser-based Designer Extension to your server-side Data Client. 
 
 In this tutorial we’ll build a Hybrid App that:
-- [Authorizes a user upon App installation](https://developers.webflow.com/data/reference/oauth-app)
-- Sends a [Site ID](https://docs.developers.webflow.com/designer/reference/get-site-info) and [ID Token](https://docs.developers.webflow.com/designer/reference/get-user-id-token) from the Designer Extension to the Data Client
-- [Resolves the ID Token in the Data Client](https://docs.developers.webflow.com/data/v2.0.0-beta/reference/resolve-1)
-- Maps a user to their Authorization
-- Creates a session token for the user
-- Makes authenticated requests to Webflow’s Data APIs.
+- **[Authorizes sites upon App installation](https://developers.webflow.com/data/reference/oauth-app)** 
+- **Transmits a Site ID and ID Token** <br/>
+  Send a [Site ID](https://docs.developers.webflow.com/designer/reference/get-site-info) and [ID Token](https://docs.developers.webflow.com/designer/reference/get-user-id-token) from the Designer Extension to the Data Client for verification.
+- **Resolves the ID Token on the Server Side**<br/>
+  The Data Client resolves the [ID Token](https://docs.developers.webflow.com/data/v2.0.0-beta/reference/resolve-1) to get user details from Webflow and verify access.
+- **Maps user authorization**<br/>
+  Establish a link between the user and their authorized sites, allowing for secure access to site data.
+- **Creates a Session Token for the user**<br/>
+  Generate and send a session token to the Designer Extension to securely maintain the user’s session and enable authenticated requests.
+- **Makes authenticated requests to Webflow’s Data APIs**<br/>
+  Use the session token and stored tokens to make authenticated API calls to Webflow’s Data APIs.
 
 By the end, you’ll have a secure, fully integrated setup to handle user sessions and seamlessly make requests to external APIs.
 
@@ -543,7 +548,7 @@ By the end, you’ll have a secure, fully integrated setup to handle user sessio
 - The `CLIENT_ID` and `CLIENT_SECRET` for your App
 - An [ngrok](https://ngrok.com/) authentication token
 - An understanding of [how to authenticate a Webflow User](https://developers.webflow.com/data/reference/oauth-app)
-- Basic knowledge of Node.js and Express and
+- Basic knowledge of Node.js and Express
 - Familiarity with building React Single-Page Applications
 
 ---
@@ -552,7 +557,7 @@ By the end, you’ll have a secure, fully integrated setup to handle user sessio
 
 ### Clone the starter code
 
-If you have GitHub CLI installed, type the following command into your terminal.
+If you have the GitHub CLI installed, type the following command into your terminal.
 
 <div className="code-container">
   <code id="code-block">$ gh repo clone Webflow-Examples/Hybrid-App-Authentication</code>
@@ -571,7 +576,7 @@ This example contains both a Designer Extension and Data Client project. Input t
 
 <div className="code-container">
   <code id="code-block">
-    $ cd Hybrid-App-Authentication <br/>
+    $ cd hybrid-app-authentication <br/>
     npm install <br/>
     npm run install-frontend <br/>
     npm run install-backend
@@ -602,7 +607,7 @@ To get started, review the `exchangeAndVerifyIdToken` function in the Designer E
 ### Retrieving the `idToken` from the Designer Extension.
 ```jsx main.js focus=21:27 mark=21:27
 ```
-The `exchangeAndVerifyIdToken` function initiates the authentication process by using the Webflow Designer API’s `getIdToken`  and `getSiteInfo` methods to retrieve the ID token and Site ID from the Designer Extension.
+The `exchangeAndVerifyIdToken` function initiates the authentication process by using the Webflow Designer API’s `getIdToken`  and `getSiteInfo` methods to retrieve the `idToken` and `siteId` from the Designer Extension.
 
 ---
 ### Exchanging the `idToken` and `siteId` for a Session Token
@@ -646,7 +651,7 @@ app.listen(PORT, () => {
 
 ## Configure authorization flow
 
-Add an endpoint on your server to handle the OAuth callback and retrieve an `authorization_code` from the URI’s query parameters. Then, exchange the code for an accessToken for your user.
+Add an endpoint on your server to handle the OAuth callback and retrieve an `authorization_code` from the URI’s query parameters. Then, create a `/callback` endpoint to exchange the code for an accessToken for your user.
 
 For an in-depth explanation on setting up auth, [check out the guide](https://developers.webflow.com/data/reference/oauth-app)
 
@@ -771,9 +776,10 @@ In addition to retrieving an `accessToken` through OAuth, your Designer Extensio
 To manage this, you’ll need to set up a new endpoint that:
 
 1. Validates the ID Token received from the Designer Extension using the [Resolve ID Token endpoint.](https://docs.developers.webflow.com/data/v2.0.0-beta/reference/resolve-1)
-2. Retrieves an `accessToken` associated with the Site ID from the database
+2. Retrieves an `accessToken` associated with the Site ID from a database
 3. Generates a Session Token for secure, temporary access.
-4. Stores the Access Token in your database, associating it with the user or site.
+4. Stores the `accessToken` in your database, associating it with the user or site.
+5. Sends the Session Token to the Designer Extension
 
 **For now, we’ll set up the endpoint to receive the ID Token. We’ll add the database storage, access token retrieval, and session token generation in the next steps.**
 
@@ -782,7 +788,8 @@ To manage this, you’ll need to set up a new endpoint that:
 ## Set up your database to save and retrieve credentials
 ```javascript database.js focus=1:34 mark=1:34
 ```
-Now that you can retrieve an access token, let’s configure your database to store user credentials and authorization details in `database.js`. This ensures secure and persistent access to user data.
+Now you've set up your server to retreive an access token, let’s configure a database to store user credentials and authorization details in `database.js`.
+
 
 ### Set up the database schema and tables
 First, you’ll create the necessary database schema to store site and user authorizations. This includes two main tables to associate site IDs and user IDs with their respective access tokens.
@@ -792,34 +799,31 @@ First, you’ll create the necessary database schema to store site and user auth
 ```javascript database.js focus=35:98 mark=35:98
 ```
 
-Next, you’ll store the site and user access tokens in the database using functions that insert new records if they don’t already exist.
+Next, you’ll store the Site IDs and user access tokens in the database using functions that insert new records if they don’t already exist.
 
 1. **Store Site Authorization Data with `insertSiteAuthorization`** <br/>
-Use this function to pair a site ID with its access token, allowing future retrieval of site-specific access details.
-
+Use this function to pair a `siteId` with its access token when a site is initially authorized.
 2. **Store User Authorization Data with `insertUserAuthorization`** <br/>
-This function pairs a user ID with their access token, which can be used to authenticate user-specific requests.
-
+Use this function to pair a `userId` and access token.
 ___
 ### Retrieve authorization data
 ```javascript database.js focus=100:146 mark=100:146
 ```
-Finally, you’ll retrieve the stored access tokens using functions designed to fetch access tokens based on site ID or user ID.
+Finally, you’ll retrieve the stored access tokens using functions designed to fetch access tokens based on `siteId` or `userId`.
 
-1. **Retrieve Site Access Tokens with `getAccessTokenFromSiteId`**
-This function retrieves the access token for a specific site ID, allowing you to authenticate requests on behalf of a site.
-
-2. **Retrieve User Access Tokens with `getAccessTokenFromUserId`**
-Use this function to get a user-specific access token, enabling authenticated access based on the user.
+1. **Retrieve Site Access Tokens with `getAccessTokenFromSiteId`**<br/>
+This function retrieves the access token for a specific `siteId`. We'll use this function to obtain user details from Webflow's [Resolve ID Token endpoint](https://docs.developers.webflow.com/data/v2.0.0-beta/reference/resolve-1) when a Designer Extension sends an `idToken` and `siteId` to our `/token` endpoint.
+2. **Retrieve User Access Tokens with `getAccessTokenFromUserId`**<br/>
+Use this function to get a user-specific access token, enabling authenticated access to the Webflow API based on the `userId`.
 
 ---
 ### Export functions 
 ```javascript database.js focus=179:187 mark=179:187
 ```
-Once these functions are ready, export them along with the database connection. This allows the Data Client to easily import and use these functions to securely access stored tokens as needed.
+Once these functions are ready, export them along with the database connection.
 
 ---
-## Configure Authorization Flow with Token Storage
+## Configure authorization flow with token storage
 ```javascript server.js focus=8
 const express = require("express");
 const cors = require("cors");
@@ -942,41 +946,41 @@ To handle authorization effectively, you’ll need to store access tokens secure
 ### Import the `database` module into `server.js` 
 
 ---
-### Exchange Authorization Code for Access Token and store it in the database
+### Exchange Aauthorization Code for Access Token and store it in the database
 ```javascript server.js focus=33:51 mark=33:51
 ```
-Update the `/callback` endpoint in `server.js` to not only exchange the authorization code for an accessToken but also retrieve a list of Site IDs associated with that token. 
+Update the `/callback` endpoint in `server.js` to exchange the `code` for an `accessToken`. 
 
-For each site, use `db.insertSiteAuthorization` to store its Site ID and corresponding Access Token in the database for secure, future access.
+To get a list of Sites that the App is authorized to access, instatiate the `WebflowClient` and call the List Sites endpoint. For each authorized site, use the `db.insertSiteAuthorization` function to store the `siteId` and corresponding `accessToken` in the database for secure, future access.
 
 ---
 ### Redirect the User to the Designer Extension using a deep link
 ```javascript server.js focus=53:64 mark=53:64
 ```
-After successfully storing the Access Tokens, redirect the user to the Designer Extension with a deep link. 
-
 This link allows the user to seamlessly continue within your App in the Webflow Designer. For now, the example below redirects to the first available site, but you could enhance the UX by allowing users to select a specific site before redirecting.
 
 ---
-# Integrate JWT for Secure Session Management
+# Integrate JWT for secure session management
 ```javascript jwt.js
 ```
-With our database configured to handle access tokens, it’s time to implement JSON Web Tokens (JWT) to securely manage sessions and authenticate requests in the Data Client. JWT will enable us to issue session tokens and validate them, allowing for a secure, stateless authentication flow.
+With our database configured to handle access tokens, it’s time to implement [JSON Web Tokens (JWT)](https://jwt.org) to securely manage sessions and authenticate requests in the Data Client. 
+
+JWT will enable us to issue session tokens and validate them, allowing for a secure, stateless authentication flow.
 
 ---
-## Setting Up JWT Middleware in `jwt.js`
+## Setting up JWT middleware
 ```javascript jwt.js focus=1:2 mark=1:2
 ```
-Start by importing the `jsonwebtoken` library and your custom `database` module. These imports will allow you to handle JWT creation and validation, as well as access and store authorization data in your database.
+In `jwt.js`, start by importing the `jsonwebtoken` library and your custom `database` module. These imports will allow you to handle JWT creation and validation, as well as access and store authorization data in your database.
 
 ---
-### Retrieve the Access Token Based on the Site ID
+### Retrieve the Access Token based on the Site ID
 ```javascript jwt.js focus=5:25 mark=5:25
 ```
 
-Create the `retrieveAccessToken` function to obtain the Access Token associated with a given Site ID. This token is crucial for enabling authenticated requests to Webflow.
+Create the `retrieveAccessToken` function to obtain the Access Token associated with a given `siteId` using the `db.getAccssTokenFromSiteId` function we created in our database module.
 
-In the `/token` endpoint on our Data Client,`retrieveAccessToken` retrieves the Access Token from the database using the associated Site ID sent from the Designer Extension. After retrieval, it attaches the Access Token to the request object. This way, subsequent steps in the endpoint have access to the token, allowing the Data Client to securely interact with Webflow’s API.
+When the Designer Extension passes a `siteId` and `idToken` to our `/token` endpoint in the Data Client, we'll use this middleware to retreive the Access Token associated with the `siteId` and attach it to the request object. This way, subsequent steps in the endpoint have access to the token, allowing the Data Client to securely interact with Webflow’s API.
 
 ---
 ### Create the Session Token from User Data
@@ -985,18 +989,18 @@ In the `/token` endpoint on our Data Client,`retrieveAccessToken` retrieves the 
 
 The `createSessionToken` function generates a session token using JWT based on user data from the resolved `idToken`. 
 
-This Session Token, which includes the user’s details, will later be verified for secure access. The token is set to expire after a defined time (in this example, 24 hours), ensuring that the session remains secure and temporary.
+This `sessionToken`, which includes the user’s details, will later be verified for secure access. The token is set to expire after a defined time (in this example, 24 hours), ensuring that the session remains secure and temporary.
 
 ---
 ### Authenticate the Session Token to Validate User Access on Each Request
 ```javascript jwt.js focus=38:72 mark=388:72
 ```
-The `authenticateSessionToken` function is middleware that validates the session token provided in the authorization header of each request. By verifying the session token, this function ensures that only authorized users can access protected routes. Upon successful validation, it retrieves the Access Token for the user and attaches it to the request, allowing further secure interactions with Webflow. 
+The `authenticateSessionToken` function is middleware that validates the `sessionToken` provided in the authorization header of each request. By verifying the `sessionToken`, this function ensures that only authorized users can access protected routes. Upon successful validation, it retrieves the `accessToken` for the user and attaches it to the request, allowing further secure interactions with Webflow. 
 
-// Export these functions once they are ready. This allows the Data Client to easily import and use these functions to securely access stored tokens as needed.
+Export these functions once they are ready.
 
 ---
-## Using JWT Middleware in `server.js`
+## Using JWT middleware in the server
 ```javascript server.js
 const express = require("express");
 const cors = require("cors");
@@ -1133,40 +1137,47 @@ Once the JWT functions are set up, the next step is to import them into `server.
 ###  Import JWT Middleware Functions
 ```javascript server.js focus=9 mark=9
 ```
-At the beginning of `server.js`, import the JWT functions. This import brings in your custom `createSessionToken`, `retrieveAccessToken`, and `authenticateSessionToken` functions, enabling you to manage user sessions and protect routes effectively.
+At the beginning of `server.js`, import the the JWT middleware.
 
 ---
 
-### Authenticate Designer Extension User via ID Token
+### Update the `/token` endpoint to authenticate the Designer Extension user
 ```javascript server.js focus=69:95 mark=69:95
 
 ```
 
 Now that you’ve set up the JWT and database functions, you can update the `/token` endpoint in `server.js` to securely authenticate the user. This endpoint will:
 
----
-#### 1. Retrieve the `accessToken`
-```javascript server.js focus=70 mark=70
-```
-The `jwt.retrieveAccessToken` middleware fetches the `accessToken` associated with the Site ID and attaches it to the request, ensuring secure access for the Webflow API call.
+1. Retrieve the `accessToken` associated with the user's `siteId`
+2. Get user details from the resolved `idToken`
+3. Generate a Session Token from user details
+4. Store the authorization details
+
+See the steps below for more detail.
 
 ---
-#### 2. Validate the `idToken`
+#### 1. Retrieve the `accessToken` associated with the user's `siteId`
+```javascript server.js focus=70 mark=70
+```
+The `jwt.retrieveAccessToken` middleware fetches the `accessToken` associated with the `siteId` and attaches it to the request, ensuring secure access for the Webflow API call.
+
+---
+#### 2. Get user details from the resolved `idToken`
 ```javascript server.js focus=73:89 mark=73:89
 ```
-Using the `accessToken`, this endpoint sends an authenticated request to Webflow’s Resolve ID Token endpoint, which validates the `idToken` received from the Designer Extension.
+Using the `accessToken`, this endpoint sends an authenticated request to Webflow’s [Resolve ID Token endpoint](https://docs.developers.webflow.com/data/v2.0.0-beta/reference/resolve-1), which validates the `idToken` received from the Designer Extension, and returns the following user details: `id`, `email`, `firstName`, and `lastName`.
 
 ---
 #### 3. Generate a Session Token
 ```javascript server.js focus=91:106 mark=91:106
 ```
-The `jwt.createSessionToken` function then creates a session token for the authenticated user, establishing a secure, temporary access session.
+With the newly obtained user information, the `jwt.createSessionToken` function creates a Session Token for the authenticated user, establishing a secure, temporary access session.
 
 ---
 #### 4. Store Authorization Details
 ```javascript server.js focus=95 mark=95
 ```
-Finally, the Access Token is stored in the database with the user’s ID using `db.insertUserAuthorization`, enabling easy access and authorization for subsequent requests
+Finally, the retrieved `accessToken` is stored in the database and associated with the `userId` using `db.insertUserAuthorization`, enabling easy access and authorization for subsequent requests
 
 ---
 
@@ -1176,37 +1187,41 @@ Finally, the Access Token is stored in the database with the user’s ID using `
 
 ```
 
-Once the session token is generated and validated, you can create a protected endpoint in server.js to handle authenticated requests on behalf of the user. The `/sites` endpoint will:
+To demonstrate how to make secure, protected requests, let's set up an endpoint that requires a Session Token for access. We'll create a new `/sites` endpoint that will:
 
+1. Authenticate the Session Token
+2. Access Webflow data in the Data Client
+3. Return Webflow data to the Designer Extension
 ---
 ### 1. **Authenticate the Session Token**
 ```javascript server.js focus=109
 
 ```
-The `jwt.authenticateSessionToken` middleware verifies the session token passed with the request, ensuring that only authorized users can access this endpoint.
-
+This endpoint will use `jwt.authenticateSessionToken` middleware to verifiy the session token passed with the request, ensuring that only authorized users can access this endpoint. Once authenticated, the middleware retrieves the user's associated `accessToken` and attaches it to the request.
 ---
-### 2. **Access Webflow Data**
+### 2. **Access Webflow Data in the Data Client**
 ```javascript server.js focus=110:114
 
 ```
-Once authenticated, the middleware retrieves the associated `accessToken` and attaches it to the request. The Data Client then uses this token to initialize the Webflow client and fetch data from Webflow’s Sites endpoint.
+The Data Client then uses the `accessToken` attached to the request to initialize the Webflow client and fetch data from Webflow’s [List Sites endpoint.](https://docs.developers.webflow.com/data/v2.0.0-beta/reference/list-sites-1)
 
 ---
-### 3. **Return Webflow Data**
+### 3. **Return Webflow Data to the Designer Extension**
 ```javascript server.js focus=115:116
 
 ```
-After retrieving the data, the endpoint responds with the information, providing the user access to their Webflow sites.
+After retrieving the data, the endpoint responds with the information, providing the user access to their Webflow sites in the Designer Extension.
 
 ---
 ## Start your App and test your authentication flow
-Run the following command to start your app:
+You're all set up to securely make calls to the Webflow Data API from a Designer Extension. To test out your App, run the following command to get started:
 
 <div className="code-container">
   <code id="code-block">$ npm run dev</code>
   <button className="copy-button" onClick={copyCode}><svg data-wf-icon="DuplicateOutlineIcon" width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path fillRule="evenodd" clipRule="evenodd" d="M6 3C6 2.44772 6.44772 2 7 2H13C13.5523 2 14 2.44772 14 3V9C14 9.55228 13.5523 10 13 10H7C6.44772 10 6 9.55228 6 9V3ZM7 3H13V9H7V3Z" fill="currentColor"></path><path d="M3 5V12C3 12.5523 3.44772 13 4 13H11V12H4V5H3Z" fill="currentColor"></path></svg></button>
 </div>
+
+Once your App is up and running: 
 
 1. **Set Your Callback URI**: Update the Webflow dashboard with the correct callback URI to ensure the OAuth flow can return to your app after authentication.
 2. **Open your App in the Designer**: Open a site in the Designer and open your test App with the corresponding `CLIENT_ID`
