@@ -5,826 +5,1246 @@ import {copyCode} from "./_app.js"
 
 <CH.Code>
 
-```js assets.js
-require("dotenv").config();
-const { WebflowClient } = require("webflow-api");
-const crypto = require("crypto");
-const axios = require("axios");
-const FormData = require("form-data");
+```jsx main.js
+import React, { useState, useEffect } from "react";
+import ReactDOM from "react-dom/client";
+import axios from "axios";
+import DataTable from "./DataTable";
+import { ThemeProvider, Button, Container, Typography } from "@mui/material";
+import theme from "./theme";
 
-const webflow = new WebflowClient({
-  accessToken: process.env.WEBFLOW_API_TOKEN,
+const App = () => {
+  const [idToken, setIdToken] = useState("");
+  const [sessionToken, setSessionToken] = useState("");
+  const [user, setUser] = useState({});
+  const [siteData, setSiteData] = useState([]);
+
+  const PORT = 3000;
+  const API_URL = `http://localhost:${PORT}/`;
+
+  useEffect(() => {
+    // Set Extension Size
+    webflow.setExtensionSize("default");
+
+    // Function to exchange and verify ID token
+    const exchangeAndVerifyIdToken = async () => {
+      try {
+        const idToken = await webflow.getIdToken();
+        const siteInfo = await webflow.getSiteInfo();
+        setIdToken(idToken);
+
+        // Resolve token by sending it to the backend server
+        const response = await axios.post(API_URL + "token", {
+          idToken: idToken,
+          siteId: siteInfo.siteId,
+        });
+
+        try {
+          // Parse information from resolved token
+          const sessionToken = response.data.sessionToken;
+          const expAt = response.data.exp;
+          const decodedToken = JSON.parse(atob(sessionToken.split(".")[1]));
+          const firstName = decodedToken.user.firstName;
+          const email = decodedToken.user.email;
+
+          // Store information in Local Storage
+          localStorage.setItem(
+            "wf_hybrid_user",
+            JSON.stringify({ sessionToken, firstName, email, exp: expAt })
+          );
+          setUser({ firstName, email });
+          setSessionToken(sessionToken);
+          console.log(`Session Token: ${sessionToken}`);
+        } catch (error) {
+          console.error("No Token", error);
+        }
+      } catch (error) {
+        console.error("Error fetching ID Token:", error);
+      }
+    };
+
+    // Check local storage for session token
+    const localStorageUser = localStorage.getItem("wf_hybrid_user");
+    if (localStorageUser) {
+      const userParse = JSON.parse(localStorageUser);
+      const userStoredSessionToken = userParse.sessionToken;
+      const userStoredTokenExp = userParse.exp;
+      if (userStoredSessionToken && Date.now() < userStoredTokenExp) {
+        if (!sessionToken) {
+          setSessionToken(userStoredSessionToken);
+          setUser({ firstName: userParse.firstName, email: userParse.email });
+        }
+      } else {
+        localStorage.removeItem("wf_hybrid_user");
+        exchangeAndVerifyIdToken();
+      }
+    } else {
+      exchangeAndVerifyIdToken();
+    }
+
+    // Listen for message from the OAuth callback window
+    const handleAuthComplete = (event) => {
+      if (
+        // event.origin === "http://localhost:3000" &&
+        event.data === "authComplete"
+      ) {
+        exchangeAndVerifyIdToken(); // Retry the token exchange
+      }
+    };
+
+    window.addEventListener("message", handleAuthComplete);
+
+    return () => {
+      window.removeEventListener("message", handleAuthComplete);
+    };
+  }, [sessionToken]);
+
+  // Handle request for site data
+  const getSiteData = async () => {
+    const sites = await axios.get(API_URL + "sites", {
+      headers: { authorization: `Bearer ${sessionToken}` },
+    });
+    setSiteData(sites.data.data.sites);
+  };
+
+  // Open OAuth screen
+  const openAuthScreen = () => {
+    window.open("http://localhost:3000", "_blank", "width=600,height=400");
+  };
+
+  return (
+    <ThemeProvider theme={theme}>
+      <div>
+        {!user.firstName ? (
+          // If no user is found, Send a Hello Stranger Message and Button to Authorize
+          <Container sx={{ padding: "20px" }}>
+            <Typography variant="h1">👋🏾 Hello Stranger</Typography>
+            <Button
+              variant="contained"
+              sx={{ margin: "10px 20px" }}
+              onClick={openAuthScreen}
+            >
+              Authorize App
+            </Button>
+          </Container>
+        ) : (
+          // If a user is found send welcome message with their name
+          <Container sx={{ padding: "20px" }}>
+            <Typography variant="h1">👋🏾 Hello {user.firstName}</Typography>
+            <Button
+              variant="contained"
+              sx={{ margin: "10px 20px" }}
+              onClick={getSiteData}
+            >
+              Get Sites
+            </Button>
+            {siteData.length > 0 && <DataTable data={siteData} />}
+          </Container>
+        )}
+      </div>
+    </ThemeProvider>
+  );
+};
+
+// Render your App component inside the root
+const rootElement = document.getElementById("root");
+const root = ReactDOM.createRoot(rootElement);
+
+root.render(<App />);
+```
+
+```javascript server.js
+const express = require("express");
+const cors = require("cors");
+const { WebflowClient } = require("webflow-api");
+const axios = require("axios");
+require("dotenv").config();
+
+const app = express(); // Create an Express application
+const db = require("./database.js"); // Load DB Logic
+const jwt = require("./jwt.js")
+
+var corsOptions = { origin: ["http://localhost:1337"] };
+
+// Middleware
+app.use(cors(corsOptions)); // Enable CORS with the specified options
+app.use(express.json()); // Parse JSON-formatted incoming requests
+app.use(express.urlencoded({ extended: true })); // Parse URL-encoded incoming requests with extended syntax
+
+// Redirect user to Webflow Authorization screen
+app.get("/authorize", (req, res) => {
+
+    const authorizeUrl = WebflowClient.authorizeURL({
+        scope: ["sites:read","authorized_user:read"],
+        clientId: process.env.WEBFLOW_CLIENT_ID,
+    })
+    res.redirect(authorizeUrl)
+})
+
+// Optional: Redirect root to Webflow Authorization screen
+app.get("/", (req,res) =>{
+    res.redirect("/authorize")
+})
+
+// Exchange the authorization code for an access token and save to DB
+app.get("/callback", async (req, res) => {
+  const { code } = req.query;
+
+  // Get Access Token
+  const accessToken = await WebflowClient.getAccessToken({
+    clientId: process.env.WEBFLOW_CLIENT_ID,
+    clientSecret: process.env.WEBFLOW_CLIENT_SECRET,
+    code: code,
+  });
+
+  // Instantiate the Webflow Client
+  const webflow = new WebflowClient({ accessToken });
+
+  // Get Authorization Details
+  const user = await webflow.token.authorizedBy();
+  user.accessToken = accessToken; // add access token to user object
+
+  // Save User Details to DB
+  db.insertAuthorization(user);
 });
 
-// Organize folders and assets
-const assetDetails = [
-  {
-    folderName: "Universal Assets",
-    assets: ["https://images.unsplash.com/photo-1451187580459-43490279c0fa"],
-  },
-  {
-    folderName: "English Assets",
-    assets: [
-      "https://images.unsplash.com/photo-1543109740-4bdb38fda756",
-      "https://images.unsplash.com/photo-1665410620550-c54105af7d0c",
-      "https://images.unsplash.com/photo-1526129318478-62ed807ebdf9",
-    ],
-  },
-  {
-    folderName: "French Assets",
-    assets: [
-      "https://images.unsplash.com/photo-1454386608169-1c3b4edc1df8",
-      "https://images.unsplash.com/photo-1500039436846-25ae2f11882e",
-      "https://images.unsplash.com/photo-1528717663417-3742fee05a29",
-    ],
-  },
-];
+// Authenticate Designer Extension User via ID Token
+app.post("/token", async (req, res) => {
+  const token = req.body.idToken; // Get token from request
 
-// Function to hash file data from URL
-async function getFileHashFromUrl(assetUrl) {
+  // Resolve Session token by makeing a Request to Webflow API
+  const APP_TOKEN = process.env.APP_TOKEN;
+  const options = {
+    method: "POST",
+    url: "https://api.webflow.com/beta/token/resolve",
+    headers: {
+      accept: "application/json",
+      "content-type": "application/json",
+      authorization: `Bearer ${process.env.APP_TOKEN}`,
+    },
+    data: {
+      idToken: token,
+    },
+  };
+  const request = await axios.request(options);
+  const user = request.data;
+
+  // Generate a Session Token
+  const sessionToken = jwt.createSessionToken(user)
+
+  // Respond to user with sesion token
+  res.json({ sessionToken });
+});
+
+// Make authenticated request with user's session token
+app.get("/sites", jwt.authenticateToken ,async (req, res) => {
   
-  // Create a promise to handle asynchronous hashing of the file data
-  return new Promise(async (resolve, reject) => {
-    try {
-      const response = await axios.get(assetUrl, { responseType: "stream" });
-      // Create a SHA-256 hash instance to generate the file hash
-      const hash = crypto.createHash("sha256");
-      // Update the hash with each chunk of data received from the stream
-      response.data.on("data", (data) => hash.update(data));
-      // Finalize the hash calculation and resolve the promise with the hash value
-      response.data.on("end", () => resolve(hash.digest("hex")));
-      response.data.on("error", reject);
-    } catch (error) {
-      reject(error);
+  try {
+    // Initialize Webflow Client and make request to sites endpoint
+    const accessToken = req.accessToken
+    const webflow = new WebflowClient({ accessToken });
+    const data = await webflow.sites.list();
+    console.log(accessToken)
+    // Send the retrieved data back to the client
+    res.json({ data });
+  } catch (error) {
+    console.error("Error handling authenticated request:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Start the server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Server is running on http://localhost:${PORT}`);
+});
+```
+
+```javascript database.js
+import sqlite3 from "sqlite3";
+import jwt from "jsonwebtoken";
+import dotenv from "dotenv";
+
+// Enable dotenv to load environment variables
+dotenv.config();
+
+// Enable verbose mode for SQLite3
+const sqlite3Verbose = sqlite3.verbose();
+
+// Open SQLite database connection
+const db = new sqlite3Verbose.Database("./db/database.db");
+
+// Create tables
+db.serialize(() => {
+
+  // Table to associate site ID with access token from OAuth
+  db.run(`
+    CREATE TABLE IF NOT EXISTS siteAuthorizations (
+      siteId TEXT PRIMARY KEY,
+      accessToken TEXT
+    )
+  `);
+
+  // Table to associate user ID with the access token
+  db.run(`
+    CREATE TABLE IF NOT EXISTS userAuthorizations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      userId TEXT,
+      accessToken TEXT
+    )
+  `);
+});
+
+// Insert a record after exchanging the OAuth code for an access token
+function insertSiteAuthorization(siteId, accessToken) {
+  db.get(
+    "SELECT * FROM siteAuthorizations WHERE siteId = ?",
+    [siteId],
+    (err, existingAuth) => {
+      if (err) {
+        console.error("Error checking for existing site authorization:", err);
+        return;
+      }
+
+      // If the user already exists, return the existing user
+      if (existingAuth) {
+        console.log("Site auth already exists:", existingAuth);
+        return;
+      }
+
+      db.run(
+        "INSERT INTO siteAuthorizations (siteId, accessToken) VALUES (?, ?)",
+        [siteId, accessToken],
+        (err) => {
+          if (err) {
+            console.error("Error inserting site authorization pairing:", err);
+          } else {
+            console.log("Site authorization pairing inserted successfully.");
+          }
+        }
+      );
     }
+  );
+}
+
+// Insert a record when the /resolve endpoint succeeds and can trust the user to be associated
+// with the access token
+function insertUserAuthorization(userId, accessToken) {
+  db.get(
+    "SELECT * FROM userAuthorizations WHERE userId = ?",
+    [userId],
+    (err, existingTokenAuth) => {
+      if (err) {
+        console.error("Error checking for existing user access token:", err);
+        return;
+      }
+
+      // If the user already exists, return the existing user
+      if (existingTokenAuth) {
+        console.log("Access token pairing already exists:", existingTokenAuth);
+        return;
+      }
+
+      db.run(
+        "INSERT INTO userAuthorizations (userId, accessToken) VALUES (?, ?)",
+        [userId, accessToken],
+        (err) => {
+          if (err) {
+            console.error("Error inserting user access token pairing:", err);
+          } else {
+            console.log("User access token pairing inserted successfully.");
+          }
+        }
+      );
+    }
+  );
+}
+
+function getAccessTokenFromSiteId(siteId, callback) {
+  // Retrieve the access token from the database
+  db.get(
+    "SELECT accessToken FROM siteAuthorizations WHERE siteId = ?",
+    [siteId],
+    (err, row) => {
+      if (err) {
+        console.error("Error retrieving access token:", err);
+        return callback(err, null);
+      }
+      // Check if site exists and has an accessToken
+      if (row && row.accessToken) {
+        return callback(null, row.accessToken);
+      } else {
+        // No user or no access token available
+        return callback(
+          new Error("No access token found or site does not exist"),
+          null
+        );
+      }
+    }
+  );
+}
+
+function getAccessTokenFromUserId(userId, callback) {
+  // Retrieve the access token from the database
+  db.get(
+    "SELECT accessToken FROM userAuthorizations WHERE userId = ?",
+    [userId],
+    (err, row) => {
+      if (err) {
+        console.error("Error retrieving access token:", err);
+        return callback(err, null);
+      }
+      // Check if user exists and has an accessToken
+      if (row && row.accessToken) {
+        return callback(null, row.accessToken);
+      } else {
+        // No user or no access token available
+        return callback(
+          new Error("No access token found or user does not exist"),
+          null
+        );
+      }
+    }
+  );
+}
+
+function clearDatabase() {
+  db.serialize(() => {
+    // Clear data from authorizations table
+    db.run("DELETE FROM authorizations", (err) => {
+      if (err) {
+        console.error("Error clearing authorizations table:", err);
+      } else {
+        console.log("Authorizations table cleared.");
+      }
+    });
+
+    // Clear data from siteAuthorizations table
+    db.run("DELETE FROM siteAuthorizations", (err) => {
+      if (err) {
+        console.error("Error clearing siteAuthorizations table:", err);
+      } else {
+        console.log("Site Authorizations table cleared.");
+      }
+    });
+
+    // Clear data from userAuthorizations table
+    db.run("DELETE FROM userAuthorizations", (err) => {
+      if (err) {
+        console.error("Error clearing userAuthorizations table:", err);
+      } else {
+        console.log("User Authorizations table cleared.");
+      }
+    });
   });
 }
 
-// Function to create an asset folder
-async function createAssetFolder(siteId, folderName) {
-  try {
-    // Check if the folder already exists
-    const existingFolders = await webflow.assets.listFolders(siteId);
-    const existingFolder = existingFolders.assetFolders.find(
-      (folder) => folder.displayName === folderName
-    );
-    if (existingFolder) {
-      console.log(
-        `Folder '${folderName}' already exists with ID: ${existingFolder.id}`
-      );
-      return existingFolder.id;
+export default {
+  db,
+  insertSiteAuthorization,
+  insertUserAuthorization,
+  getAccessTokenFromSiteId,
+  getAccessTokenFromUserId,
+  clearDatabase,
+};
+
+```
+
+```javascript jwt.js
+import jwt from "jsonwebtoken";
+import db from "./database.js";
+
+// Given a site ID, retrieve associated Access Token
+const retrieveAccessToken = (req, res, next) => {
+  const idToken = req.body.idToken;
+  const siteId = req.body.siteId;
+
+  if (!idToken) {
+    return res.status(401).json({ message: "ID Token is missing" });
+  }
+  if (!siteId) {
+    return res.status(401).json({ message: "Site ID is missing" });
+  }
+
+  db.getAccessTokenFromSiteId(siteId, (error, accessToken) => {
+    if (error) {
+      return res.status(500).json({ error: "Failed to retrieve access token" });
+    }
+    // Attach access token in the request object so that you can make an authenticated request to Webflow
+    req.accessToken = accessToken;
+
+    next(); // Proceed to next middleware or route handler
+  });
+};
+
+const createSessionToken = (user) => {
+  const sessionToken = jwt.sign({ user }, process.env.WEBFLOW_CLIENT_SECRET, {
+    expiresIn: "24h",
+  }); // Example expiration time of 1 hour}
+  const decodedToken = jwt.decode(sessionToken);
+  return {
+    sessionToken,
+    exp: decodedToken.exp,
+  };
+};
+
+// Middleware to authenticate and validate JWT, and fetch the access token given the user ID
+const authenticateSessionToken = (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  const sessionToken = authHeader && authHeader.split(" ")[1]; // Extract the token from 'Bearer <token>'
+  if (!sessionToken) {
+    return res.status(401).json({ message: "Authentication token is missing" });
+  }
+
+  // Verify the Token
+  jwt.verify(sessionToken, process.env.WEBFLOW_CLIENT_SECRET, (err, user) => {
+    if (err) {
+      return res.status(403).json({ message: "Invalid or expired token" });
     }
 
-    // Create the folder if it does not exist
-    console.log(`Creating folder: ${folderName}`);
-    const response = await webflow.assets.createFolder(siteId, {
-      displayName: folderName,
-    });
-    console.log(`Folder '${folderName}' created with ID: ${response.id}`);
-    return response.id; // Return folder ID for further use
-  } catch (error) {
-    console.error(
-      `Error creating or retrieving asset folder '${folderName}':`,
-      error
-    );
-  }
-}
-
-// Function to upload an asset to Webflow via S3
-async function uploadAsset(siteId, folderId, assetUrl) {
-  try {
-    // Generate the file hash for validation
-    const fileHash = await getFileHashFromUrl(assetUrl);
-    const fileName = assetUrl.split("/").pop();
-
-    // Step 1: Initialize the upload
-    const uploadInit = await webflow.assets.create(siteId, {
-      parentFolder: folderId,
-      fileName: fileName + `.jpeg`,
-      fileHash: fileHash,
-    });
-    const { uploadUrl, uploadDetails } = uploadInit;
-
-    // Create form data for S3 upload
-    const form = new FormData();
-
-    // Append all required fields to the form
-    form.append("acl", uploadDetails.acl);
-    form.append("bucket", uploadDetails.bucket);
-    form.append("X-Amz-Algorithm", uploadDetails.xAmzAlgorithm);
-    form.append("X-Amz-Credential", uploadDetails.xAmzCredential);
-    form.append("X-Amz-Date", uploadDetails.xAmzDate);
-    form.append("key", uploadDetails.key);
-    form.append("Policy", uploadDetails.policy);
-    form.append("X-Amz-Signature", uploadDetails.xAmzSignature);
-    form.append("success_action_status", uploadDetails.successActionStatus);
-    form.append("Content-Type", uploadDetails.contentType);
-    form.append("Cache-Control", uploadDetails.cacheControl);
-
-    // Append the file to be uploaded
-    const response = await axios.get(assetUrl, { responseType: "stream" });
-    form.append("file", response.data, {
-      filename: fileName,
-      contentType: uploadDetails.contentType,
-    });
-    console.log(response);
-
-    // Step 2: Upload to the provided S3 URL
-    const uploadResponse = await axios.post(uploadUrl, form, {
-      headers: {
-        ...form.getHeaders(),
-      },
-    });
-
-    if (uploadResponse.status === 201) {
-      console.log(`Successfully uploaded ${fileName} to Webflow.`);
-    } else {
-      console.error(
-        `Failed to upload ${fileName}. Response status: ${uploadResponse.status}`
-      );
-    }
-  } catch (error) {
-    console.error(`Error uploading asset from ${assetUrl}:`, error);
-  }
-}
-
-// Main function to execute the upload
-(async () => {
-  const siteId = process.env.SITE_ID; // Replace with your actual site ID
-
-  for (const { folderName, assets } of assetDetails) {
-    const folderId = await createAssetFolder(siteId, folderName);
-    if (folderId) {
-      for (const assetUrl of assets) {
-        await uploadAsset(siteId, folderId, assetUrl);
+    // Use the user details to fetch the access token from the database
+    db.getAccessTokenFromUserId(user.user.id, (error, accessToken) => {
+      if (error) {
+        return res
+          .status(500)
+          .json({ error: "Failed to retrieve access token" });
       }
-    }
-  }
-})();
+      // Attach access token in the request object so that you can make an authenticated request to Webflow
+      req.accessToken = accessToken;
+
+      next(); // Proceed to next middleware or route handler
+    });
+  });
+};
+
+export default {
+  createSessionToken,
+  retrieveAccessToken,
+  authenticateSessionToken,
+};
 ```
 
 </CH.Code>
 
+Securely connect your browser-based Designer Extension to your server-side Data Client. 
 
+In this tutorial we’ll build a Hybrid App that:
+- **[Authorizes sites upon App installation](https://developers.webflow.com/data/reference/oauth-app)** 
+- **Transmits a Site ID and ID Token** <br/>
+  Send a [Site ID](https://docs.developers.webflow.com/designer/reference/get-site-info) and [ID Token](https://docs.developers.webflow.com/designer/reference/get-user-id-token) from the Designer Extension to the Data Client for verification.
+- **Resolves the ID Token on the Server Side**<br/>
+  The Data Client resolves the [ID Token](https://docs.developers.webflow.com/data/v2.0.0-beta/reference/resolve-1) to get user details from Webflow and verify access.
+- **Maps user authorization**<br/>
+  Establish a link between the user and their authorized sites, allowing for secure access to site data.
+- **Creates a Session Token for the user**<br/>
+  Generate and send a session token to the Designer Extension to securely maintain the user’s session and enable authenticated requests.
+- **Makes authenticated requests to Webflow’s Data APIs**<br/>
+  Use the session token and stored tokens to make authenticated API calls to Webflow’s Data APIs.
+
+By the end, you’ll have a secure, fully integrated setup to handle user sessions and seamlessly make requests to external APIs.
 
 ### Prerequisites
-- TEST
+- A [Hybrid App](https://docs.developers.webflow.com/data/docs/register-an-app) with the following [scopes](https://docs.developers.webflow.com/data/reference/scopes): `sites:read`, `authorized_user:read`
+- The `CLIENT_ID` and `CLIENT_SECRET` for your App
+- An [ngrok](https://ngrok.com/) authentication token
+- An understanding of [how to authenticate a Webflow User](https://developers.webflow.com/data/reference/oauth-app)
+- Basic knowledge of Node.js and Express
+- Familiarity with building React Single-Page Applications
+
 ---
 
 ## Set up your development environment
 
-### 1. Create a new Node.js project
+### Clone the starter code
 
-First, let's set up the basic Node.js environment for your project. Start by creating a new directory and initializing a Node.js project:
+If you have the GitHub CLI installed, type the following command into your terminal.
+
+<div className="code-container">
+  <code id="code-block">$ gh repo clone Webflow-Examples/Hybrid-App-Authentication</code>
+  <button className="copy-button" onClick={copyCode}><svg data-wf-icon="DuplicateOutlineIcon" width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path fillRule="evenodd" clipRule="evenodd" d="M6 3C6 2.44772 6.44772 2 7 2H13C13.5523 2 14 2.44772 14 3V9C14 9.55228 13.5523 10 13 10H7C6.44772 10 6 9.55228 6 9V3ZM7 3H13V9H7V3Z" fill="currentColor"></path><path d="M3 5V12C3 12.5523 3.44772 13 4 13H11V12H4V5H3Z" fill="currentColor"></path></svg></button>
+</div>
+
+Otherwise, you can clone the repository from GitHub.com
+
+<button><a href="https://github.com/Webflow-Examples/Hybrid-App-Authentication" target="_blank">Clone Example Repository</a></button>
+
+---
+
+### Install dependencies
+
+This example contains both a Designer Extension and Data Client project. Input the following commands in your terminal to install all necessary dependencies for the example.
 
 <div className="code-container">
   <code id="code-block">
-    $ mkdir webflow-asset-uploader <br/>
-    $ cd webflow-asset-uploader <br/>
-    $ npm init -y <br/>
+    $ cd hybrid-app-authentication <br/>
+    npm install <br/>
+    npm run install-frontend <br/>
+    npm run install-backend
   </code>
   <button className="copy-button" onClick={copyCode}><svg data-wf-icon="DuplicateOutlineIcon" width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path fillRule="evenodd" clipRule="evenodd" d="M6 3C6 2.44772 6.44772 2 7 2H13C13.5523 2 14 2.44772 14 3V9C14 9.55228 13.5523 10 13 10H7C6.44772 10 6 9.55228 6 9V3ZM7 3H13V9H7V3Z" fill="currentColor"></path><path d="M3 5V12C3 12.5523 3.44772 13 4 13H11V12H4V5H3Z" fill="currentColor"></path></svg></button>
 </div>
 
-This will create a new directory called `webflow-asset-uploader` and set up a `package.json` file, which will manage the project's dependencies and configurations.
-
 ---
 
-### 2. Create a new `.env` file
-
-Next, you'll need to create a `.env` file to securely store environment variables like your API tokens. These values are crucial for authenticating requests to the Webflow API.
-
-Open the `.env` file in your editor and add the following variables:
-
-```system .env
-WEBFLOW_API_TOKEN=YOUR_WEBFLOW_API_TOKEN
-SITE_ID=YOUR_SITE_ID
+### Add environment variables
+```config .env
+    WEBFLOW_CLIENT_ID=XXX
+    WEBFLOW_CLIENT_SECRET=XXX
+    PORT=3000
+    NGROK_AUTH_TOKEN=XXX
 ```
-
-Replace `YOUR_WEBFLOW_API_TOKEN` and `YOUR_SITE_ID` with your Webflow credentials.
-
----
-
-### 3. Install necessary packages
-To build this asset upload script, you'll need several Node.js packages. Use npm to install these dependencies.
-
-<div className="code-container">
-  <code id="code-block">
-    $ npm install dotenv webflow-api axios form-data crypto
-  </code>
-  <button className="copy-button" onClick={copyCode}><svg data-wf-icon="DuplicateOutlineIcon" width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path fillRule="evenodd" clipRule="evenodd" d="M6 3C6 2.44772 6.44772 2 7 2H13C13.5523 2 14 2.44772 14 3V9C14 9.55228 13.5523 10 13 10H7C6.44772 10 6 9.55228 6 9V3ZM7 3H13V9H7V3Z" fill="currentColor"></path><path d="M3 5V12C3 12.5523 3.44772 13 4 13H11V12H4V5H3Z" fill="currentColor"></path></svg></button>
-</div>
-
-- **dotenv**: Loads environment variables from your `.env` file.
-- **webflow-api**: The official Webflow API client for interacting with Webflow resources.
-- **axios**: A promise-based HTTP client for making requests to external APIs.
-- **form-data**: Helps you create form data for uploading files.
-- **crypto**: A built-in Node.js module for generating hashes, which will help verify file integrity during uploads.
-Once installed, these packages will enable you to interact with the Webflow API and upload assets to your projects.
----
-
-### 4. Create `assets.js`
-
-Next, create a new JavaScript file called `assets.js`. This file will contain the code to upload assets to Webflow.
-
-<div className="code-container">
-  <code id="code-block">
-    $ touch assets.js
-  </code>
-  <button className="copy-button" onClick={copyCode}><svg data-wf-icon="DuplicateOutlineIcon" width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path fillRule="evenodd" clipRule="evenodd" d="M6 3C6 2.44772 6.44772 2 7 2H13C13.5523 2 14 2.44772 14 3V9C14 9.55228 13.5523 10 13 10H7C6.44772 10 6 9.55228 6 9V3ZM7 3H13V9H7V3Z" fill="currentColor"></path><path d="M3 5V12C3 12.5523 3.44772 13 4 13H11V12H4V5H3Z" fill="currentColor"></path></svg></button>
-</div>
-
-This file will be the main script where we'll import the necessary packages and write the functions to handle asset uploads.
+Replace the example values in the `.env.example` file with your credentials. Rename the file to `.env`
 
 ---
-
-### 5. Import packages
-Open the `assets.js` file in your editor and import the packages you installed.
-
-These imports will give you access to the tools you need for interacting with the Webflow API, making HTTP requests, and working with form data.
-
-```js assets.js
-require("dotenv").config();
-const { WebflowClient } = require("webflow-api");
-const crypto = require("crypto");
-const axios = require("axios");
-const FormData = require("form-data");
-
+## Review Designer Extension
+```jsx main.js focus=21:56 mark=21:56
 ```
+In this tutorial, most of our focus will be on setting up and configuring the Data Client. However, to kick off the authentication process, we need to first send an ID token and Site ID from the Designer Extension to the Data Client. This step will allow us to exchange these tokens for a session token, which is required for making authenticated requests to Webflow’s API from the browser.
+
+To get started, review the `exchangeAndVerifyIdToken` function in the Designer Extension. 
+
+---
+### Retrieving the `idToken` from the Designer Extension.
+```jsx main.js focus=21:27 mark=21:27
+```
+The `exchangeAndVerifyIdToken` function initiates the authentication process by using the Webflow Designer API’s `getIdToken`  and `getSiteInfo` methods to retrieve the `idToken` and `siteId` from the Designer Extension.
+
+---
+### Exchanging the `idToken` and `siteId` for a Session Token
+```jsx main.js focus=28:56 mark=28:56
+```
+With the ID token and Site ID in hand, the Designer Extension then sends this information to an endpoint on the Data Client.
+
+The Data Client verifies the ID token and returns a session token, which the Designer Extension will use to make authenticated requests to Webflow. This token ensures secure, temporary access and allows the Designer Extension to manage user sessions as we continue through the setup.
+
 ---
 
-### 6. Initialize the Webflow client
-Initialize the Webflow client using the API token from your `.env` file.
+## Set up your server
+Switching to the Data Client, let’s quickly set up an Express server to handle incoming requests and prepare for adding authentication in `Data Client/server.js`.
 
-```js assets.js
-require("dotenv").config();
+### Initialize Express
+Create your server with Express, configure CORS to accept incoming requests from your Designer, and set up middleware for JSON and URL-encoded requests
+
+```javascript server.js 
+const express = require("express");
+const cors = require("cors");
 const { WebflowClient } = require("webflow-api");
-const crypto = require("crypto");
 const axios = require("axios");
-const FormData = require("form-data");
+require("dotenv").config();
 
-// Initialize Webflow client
-const webflow = new WebflowClient({
-  accessToken: process.env.WEBFLOW_API_TOKEN,
+const app = express(); // Create an Express application
+
+var corsOptions = { origin: ["http://localhost:1337"] };
+
+// Middleware
+app.use(cors(corsOptions)); // Enable CORS with the specified options
+app.use(express.json()); // Parse JSON-formatted incoming requests
+app.use(express.urlencoded({ extended: true })); // Parse URL-encoded incoming requests with extended syntax
+
+// Start the server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Server is running on http://localhost:${PORT}`);
 });
-
 ```
-The Webflow client will allow you to interact with Webflow's resources, such as creating folders and uploading assets.
-
 ---
 
-### 7. Define asset folders and files
-For this example, we'll define a set of folders and assets to upload. In practice, you might be pulling these from another location or database, but for this guide, we'll use a hardcoded list.
+## Configure authorization flow
 
-```js assets.js
-require("dotenv").config();
+Add an endpoint on your server to handle the OAuth callback and retrieve an `authorization_code` from the URI’s query parameters. Then, create a `/callback` endpoint to exchange the code for an accessToken for your user.
+
+For an in-depth explanation on setting up auth, [check out the guide](https://developers.webflow.com/data/reference/oauth-app)
+
+<button><a href="https://developers.webflow.com/data/reference/oauth-app" target="_blank">Explore the Webflow OAuth Guide</a></button>
+
+```javascript server.js 
+const express = require("express");
+const cors = require("cors");
 const { WebflowClient } = require("webflow-api");
-const crypto = require("crypto");
 const axios = require("axios");
-const FormData = require("form-data");
-
-// Initialize Webflow client
-const webflow = new WebflowClient({
-  accessToken: process.env.WEBFLOW_API_TOKEN,
-});
-
-// Organize folders and assets
-const assetDetails = [
-  {
-    folderName: "Universal Assets",
-    assets: ["https://images.unsplash.com/photo-1451187580459-43490279c0fa"],
-  },
-  {
-    folderName: "English Assets",
-    assets: [
-      "https://images.unsplash.com/photo-1543109740-4bdb38fda756",
-      "https://images.unsplash.com/photo-1665410620550-c54105af7d0c",
-      "https://images.unsplash.com/photo-1526129318478-62ed807ebdf9",
-    ],
-  },
-  {
-    folderName: "French Assets",
-    assets: [
-      "https://images.unsplash.com/photo-1454386608169-1c3b4edc1df8",
-      "https://images.unsplash.com/photo-1500039436846-25ae2f11882e",
-      "https://images.unsplash.com/photo-1528717663417-3742fee05a29",
-    ],
-  },
-];
-```
-
----
-
-## Create asset folders
-
-```js assets.js focus=36:63 mark=36:63
 require("dotenv").config();
-const { WebflowClient } = require("webflow-api");
-const crypto = require("crypto");
-const axios = require("axios");
-const FormData = require("form-data");
 
-// Initialize Webflow client
-const webflow = new WebflowClient({
-  accessToken: process.env.WEBFLOW_API_TOKEN,
-});
+const app = express(); // Create an Express application
 
-// Organize folders and assets
-const assetDetails = [
-  {
-    folderName: "Universal Assets",
-    assets: ["https://images.unsplash.com/photo-1451187580459-43490279c0fa"],
-  },
-  {
-    folderName: "English Assets",
-    assets: [
-      "https://images.unsplash.com/photo-1543109740-4bdb38fda756",
-      "https://images.unsplash.com/photo-1665410620550-c54105af7d0c",
-      "https://images.unsplash.com/photo-1526129318478-62ed807ebdf9",
-    ],
-  },
-  {
-    folderName: "French Assets",
-    assets: [
-      "https://images.unsplash.com/photo-1454386608169-1c3b4edc1df8",
-      "https://images.unsplash.com/photo-1500039436846-25ae2f11882e",
-      "https://images.unsplash.com/photo-1528717663417-3742fee05a29",
-    ],
-  },
-];
+var corsOptions = { origin: ["http://localhost:1337"] };
 
-// Function to create an asset folder
-async function createAssetFolder(siteId, folderName) {
-  try {
-    // Check if the folder already exists
-    const existingFolders = await webflow.assets.listFolders(siteId);
-    const existingFolder = existingFolders.assetFolders.find(
-      (folder) => folder.displayName === folderName
-    );
-    if (existingFolder) {
-      console.log(
-        `Folder '${folderName}' already exists with ID: ${existingFolder.id}`
-      );
-      return existingFolder.id;
-    }
-    // Create the folder if it does not exist
-    console.log(`Creating folder: ${folderName}`);
-    const response = await webflow.assets.createFolder(siteId, {
-      displayName: folderName,
-    });
-    console.log(`Folder '${folderName}' created with ID: ${response.id}`);
-    return response.id; // Return folder ID for further use
-  } catch (error) {
-    console.error(
-      `Error creating or retrieving asset folder '${folderName}':`,
-      error
-    );
-  }
-}
+// Middleware
+app.use(cors(corsOptions)); // Enable CORS with the specified options
+app.use(express.json()); // Parse JSON-formatted incoming requests
+app.use(express.urlencoded({ extended: true })); // Parse URL-encoded incoming requests with extended syntax
 
-// Main function to execute the folder creation and asset upload
-(async () => {
-  const siteId = process.env.SITE_ID;
-
-  for (const { folderName, assets } of assetDetails) {
-    const folderId = await createAssetFolder(siteId, folderName);
-    if (folderId) {
-      for (const assetUrl of assets) {
-        // TO ADD: Upload logic
-      }
-    }
-  }
-})();
-```
-
-Now that we have defined our folders and assets, the next step is to create asset folders on the Webflow site.
-
----
-
-### 1. Create function `createAssetFolder()`
-
-```js assets.js focus=37:37
-```
-
-This function, `createAssetFolder`, takes the site ID and folder name as arguments.
-
----
-
-### 2. Check for existing asset folders
-
-```js assets.js focus=38:48 mark=38:48
-```
-Webflow only allows unique names for asset folders, so the first step is to check if a folder with the specified name already exists. We do this using the [List Asset Folders](https://developers.webflow.com/data/reference/assets/asset-folders/list-folders) endpoint.  If a folder with the given name is found, the function returns the folder's ID.
-
----
-
-### 3. Create new asset folder if one doesn't exist
-```js assets.js focus=50:63 mark=50:63
-```
-If a folder does not already exist, proceed to create one using the [Create Asset Folder](https://developers.webflow.com/data/reference/assets/asset-folders/create-folder) endpoint. Once successfully created, the function returns the ID of the newly created folder.
-
----
-
-### 4. Create main function
-```js assets.js focus=65:77 mark=65:77
-```
-To execute the `createAssetFolder()` function, create an anonymous function that iterates through the list of folders we defined earlier and calls `createAssetFolder` for each one. This ensures that all required folders are created.
-
----
-
-## Generate a file hash
-```js assets.js focus=65:88 mark=65:88
-require("dotenv").config();
-const { WebflowClient } = require("webflow-api");
-const crypto = require("crypto");
-const axios = require("axios");
-const FormData = require("form-data");
-
-// Initialize Webflow client
-const webflow = new WebflowClient({
-  accessToken: process.env.WEBFLOW_API_TOKEN,
-});
-
-// Organize folders and assets
-const assetDetails = [
-  {
-    folderName: "Universal Assets",
-    assets: ["https://images.unsplash.com/photo-1451187580459-43490279c0fa"],
-  },
-  {
-    folderName: "English Assets",
-    assets: [
-      "https://images.unsplash.com/photo-1543109740-4bdb38fda756",
-      "https://images.unsplash.com/photo-1665410620550-c54105af7d0c",
-      "https://images.unsplash.com/photo-1526129318478-62ed807ebdf9",
-    ],
-  },
-  {
-    folderName: "French Assets",
-    assets: [
-      "https://images.unsplash.com/photo-1454386608169-1c3b4edc1df8",
-      "https://images.unsplash.com/photo-1500039436846-25ae2f11882e",
-      "https://images.unsplash.com/photo-1528717663417-3742fee05a29",
-    ],
-  },
-];
-
-// Function to create an asset folder
-async function createAssetFolder(siteId, folderName) {
-  try {
-    // Check if the folder already exists
-    const existingFolders = await webflow.assets.listFolders(siteId);
-    const existingFolder = existingFolders.assetFolders.find(
-      (folder) => folder.displayName === folderName
-    );
-    if (existingFolder) {
-      console.log(
-        `Folder '${folderName}' already exists with ID: ${existingFolder.id}`
-      );
-      return existingFolder.id;
-    }
-    // Create the folder if it does not exist
-    console.log(`Creating folder: ${folderName}`);
-    const response = await webflow.assets.createFolder(siteId, {
-      displayName: folderName,
-    });
-    console.log(`Folder '${folderName}' created with ID: ${response.id}`);
-    return response.id; // Return folder ID for further use
-  } catch (error) {
-    console.error(
-      `Error creating or retrieving asset folder '${folderName}':`,
-      error
-    );
-  }
-}
-
-// Function to hash file data from URL
-async function getFileHashFromUrl(assetUrl) {
-  
-  // Create a promise to handle asynchronous hashing of the file data
-  return new Promise(async (resolve, reject) => {
-    try {
-
-      // Fetch the file as a stream
-      const response = await axios.get(assetUrl, { responseType: "stream" });
-      
-      // Initialize SHA-256 hash
-      const hash = crypto.createHash("sha256");
-      
-      // Update the hash with each chunk of data received from the stream
-      response.data.on("data", (data) => hash.update(data));
-      
-      // Finalize the hash calculation and resolve the promise with the hash value
-      response.data.on("end", () => resolve(hash.digest("hex")));
-      response.data.on("error", reject);
-    } catch (error) {
-      reject(error);
-    }
+// Redirect user to Webflow Authorization screen
+app.get("/authorize", (req, res) => {
+  const authorizeUrl = WebflowClient.authorizeURL({
+    scope: ["sites:read", "authorized_user:read"],
+    clientId: process.env.WEBFLOW_CLIENT_ID,
   });
-}
-
-// Main function to execute the folder creation and asset upload
-(async () => {
-  const siteId = process.env.SITE_ID;
-
-  for (const { folderName, assets } of assetDetails) {
-    const folderId = await createAssetFolder(siteId, folderName);
-    if (folderId) {
-      for (const assetUrl of assets) {
-        // TO ADD: Upload logic
-      }
-    }
-  }
-})();
-```
-Webflow requires a file hash when uploading a new asset. This hash helps ensure data integrity and security, providing a unique "fingerprint" of the file that guarantees it hasn't been altered or tampered with during the upload process.
-
-Before uploading an asset, we'll need to generate its hash using the **SHA-256** algorithm.
-
----
-
-### 1. Create `getFileHashFromUrl` function
-```js assets.js focus=65:88
-```
-To generate the file hash, create a function named getFileHashFromUrl. This function will:
-- Use **axios** to retrieve the file from the provided URL with a GET request.
-- Use **crypto** to calculate the hash with a stream-based approach, which efficiently handles larger files.
-
----
-
-### 2. Create the Promise
-```js assets.js focus=69 mark=69
-```
-Wrap the function logic in a new `Promise` to handle the asynchronous hashing. Use `resolve` to return the hash value once calculated, and `reject` to handle any errors that occur.
-
----
-
-### 3. Fetch the file as a stream
-```js assets.js focus=65:88 mark=73
-```
-Use axios to download the file as a stream from the provided URL. Streaming is particularly helpful for large files since it avoids loading the entire file into memory.
-
----
-
-### 4. Hash the file
-```js assets.js focus=65:88 mark=75:83
-```
-Create a SHA-256 hash instance to compute the hash of the file. Update the hash with each data chunk as it is streamed. Once the entire file has been streamed, resolve the promise with the final hash value.
-
----
-
-## Upload a new asset
-```js assets.js focus=90:146
-require("dotenv").config();
-const { WebflowClient } = require("webflow-api");
-const crypto = require("crypto");
-const axios = require("axios");
-const FormData = require("form-data");
-
-// Initialize Webflow client
-const webflow = new WebflowClient({
-  accessToken: process.env.WEBFLOW_API_TOKEN,
+  res.redirect(authorizeUrl);
 });
 
-// Organize folders and assets
-const assetDetails = [
-  {
-    folderName: "Universal Assets",
-    assets: ["https://images.unsplash.com/photo-1451187580459-43490279c0fa"],
-  },
-  {
-    folderName: "English Assets",
-    assets: [
-      "https://images.unsplash.com/photo-1543109740-4bdb38fda756",
-      "https://images.unsplash.com/photo-1665410620550-c54105af7d0c",
-      "https://images.unsplash.com/photo-1526129318478-62ed807ebdf9",
-    ],
-  },
-  {
-    folderName: "French Assets",
-    assets: [
-      "https://images.unsplash.com/photo-1454386608169-1c3b4edc1df8",
-      "https://images.unsplash.com/photo-1500039436846-25ae2f11882e",
-      "https://images.unsplash.com/photo-1528717663417-3742fee05a29",
-    ],
-  },
-];
+// Exchange the authorization code for an access token and save to DB
+app.get("/callback", async (req, res) => {
+  const { code } = req.query;
 
-// Function to create an asset folder
-async function createAssetFolder(siteId, folderName) {
-  try {
-    // Check if the folder already exists
-    const existingFolders = await webflow.assets.listFolders(siteId);
-    const existingFolder = existingFolders.assetFolders.find(
-      (folder) => folder.displayName === folderName
-    );
-    if (existingFolder) {
-      console.log(
-        `Folder '${folderName}' already exists with ID: ${existingFolder.id}`
-      );
-      return existingFolder.id;
-    }
-    // Create the folder if it does not exist
-    console.log(`Creating folder: ${folderName}`);
-    const response = await webflow.assets.createFolder(siteId, {
-      displayName: folderName,
-    });
-    console.log(`Folder '${folderName}' created with ID: ${response.id}`);
-    return response.id; // Return folder ID for further use
-  } catch (error) {
-    console.error(
-      `Error creating or retrieving asset folder '${folderName}':`,
-      error
-    );
-  }
-}
-
-// Function to hash file data from URL
-async function getFileHashFromUrl(assetUrl) {
-  
-  // Create a promise to handle asynchronous hashing of the file data
-  return new Promise(async (resolve, reject) => {
-    try {
-
-      // Fetch the file as a stream
-      const response = await axios.get(assetUrl, { responseType: "stream" });
-      
-      // Initialize SHA-256 hash
-      const hash = crypto.createHash("sha256");
-      
-      // Update the hash with each chunk of data received from the stream
-      response.data.on("data", (data) => hash.update(data));
-      
-      // Finalize the hash calculation and resolve the promise with the hash value
-      response.data.on("end", () => resolve(hash.digest("hex")));
-      response.data.on("error", reject);
-    } catch (error) {
-      reject(error);
-    }
+  // Get Access Token
+  const accessToken = await WebflowClient.getAccessToken({
+    clientId: process.env.WEBFLOW_CLIENT_ID,
+    clientSecret: process.env.WEBFLOW_CLIENT_SECRET,
+    code: code,
   });
-}
 
-// Function to upload an asset to Webflow via S3
-async function uploadAsset(siteId, folderId, assetUrl) {
+    // TODO: Save accessToken to the database, associated with user/site info
+    // db.insertAuthorization({ userId: "userID", accessToken });
+})
+
+// Start the server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Server is running on http://localhost:${PORT}`);
+});
+
+```
+
+---
+### Handling the ID Token and Site ID from the Designer Extension
+```javascript server.js  focus=40:54 mark:40:54
+const express = require("express");
+const cors = require("cors");
+const { WebflowClient } = require("webflow-api");
+const axios = require("axios");
+require("dotenv").config();
+
+const app = express(); // Create an Express application
+
+var corsOptions = { origin: ["http://localhost:1337"] };
+
+// Middleware
+app.use(cors(corsOptions)); // Enable CORS with the specified options
+app.use(express.json()); // Parse JSON-formatted incoming requests
+app.use(express.urlencoded({ extended: true })); // Parse URL-encoded incoming requests with extended syntax
+
+// Redirect user to Webflow Authorization screen
+app.get("/authorize", (req, res) => {
+  const authorizeUrl = WebflowClient.authorizeURL({
+    scope: ["sites:read", "authorized_user:read"],
+    clientId: process.env.WEBFLOW_CLIENT_ID,
+  });
+  res.redirect(authorizeUrl);
+});
+
+// Exchange the authorization code for an access token and save to DB
+app.get("/callback", async (req, res) => {
+  const { code } = req.query;
+
+  // Get Access Token
+  const accessToken = await WebflowClient.getAccessToken({
+    clientId: process.env.WEBFLOW_CLIENT_ID,
+    clientSecret: process.env.WEBFLOW_CLIENT_SECRET,
+    code: code,
+  });
+
+    // TODO: Save accessToken to the database, associated with user/site info
+    // db.insertAuthorization({ userId: "userID", accessToken });
+})
+
+// Endpoint to authenticate user with ID Token and Site ID
+app.post("/token", (req, res) => {
+  const idToken = req.body.idToken; // Get token from request
+
+  // Placeholder for token validation
+  // jwt.retrieveAccessToken();
+
+  // TODO: Resolve ID Token with Webflow API and create a session token
+  // - Make a request to the Webflow API to resolve the ID Token
+  // - Create a session token for the user
+  // - Store user authorization info in the database
+  // - Respond with the session token
+
+  res.json({ message: "Token endpoint setup pending." });
+});
+
+
+// Start the server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Server is running on http://localhost:${PORT}`);
+});
+
+```
+In addition to retrieving an `accessToken` through OAuth, your Designer Extension will also receive an `idToken` and a `siteId` during the authentication process for the Designer Extension. These tokens enable you to verify and authorize user access securely.
+
+To manage this, you’ll need to set up a new endpoint that:
+
+1. Validates the ID Token received from the Designer Extension using the [Resolve ID Token endpoint.](https://docs.developers.webflow.com/data/v2.0.0-beta/reference/resolve-1)
+2. Retrieves an `accessToken` associated with the Site ID from a database
+3. Generates a Session Token for secure, temporary access.
+4. Stores the `accessToken` in your database, associating it with the user or site.
+5. Sends the Session Token to the Designer Extension
+
+**For now, we’ll set up the endpoint to receive the ID Token. We’ll add the database storage, access token retrieval, and session token generation in the next steps.**
+
+---
+
+## Set up your database to save and retrieve credentials
+```javascript database.js focus=1:34 mark=1:34
+```
+Now you've set up your server to retreive an access token, let’s configure a database to store user credentials and authorization details in `database.js`.
+
+
+### Set up the database schema and tables
+First, you’ll create the necessary database schema to store site and user authorizations. This includes two main tables to associate site IDs and user IDs with their respective access tokens.
+
+---
+### Store authorization data
+```javascript database.js focus=35:98 mark=35:98
+```
+
+Next, you’ll store the Site IDs and user access tokens in the database using functions that insert new records if they don’t already exist.
+
+1. **Store Site Authorization Data with `insertSiteAuthorization`** <br/>
+Use this function to pair a `siteId` with its access token when a site is initially authorized.
+2. **Store User Authorization Data with `insertUserAuthorization`** <br/>
+Use this function to pair a `userId` and access token.
+___
+### Retrieve authorization data
+```javascript database.js focus=100:146 mark=100:146
+```
+Finally, you’ll retrieve the stored access tokens using functions designed to fetch access tokens based on `siteId` or `userId`.
+
+1. **Retrieve Site Access Tokens with `getAccessTokenFromSiteId`**<br/>
+This function retrieves the access token for a specific `siteId`. We'll use this function to obtain user details from Webflow's [Resolve ID Token endpoint](https://docs.developers.webflow.com/data/v2.0.0-beta/reference/resolve-1) when a Designer Extension sends an `idToken` and `siteId` to our `/token` endpoint.
+2. **Retrieve User Access Tokens with `getAccessTokenFromUserId`**<br/>
+Use this function to get a user-specific access token, enabling authenticated access to the Webflow API based on the `userId`.
+
+---
+### Export functions 
+```javascript database.js focus=179:187 mark=179:187
+```
+Once these functions are ready, export them along with the database connection.
+
+---
+## Configure authorization flow with token storage
+```javascript server.js focus=8
+const express = require("express");
+const cors = require("cors");
+const { WebflowClient } = require("webflow-api");
+const axios = require("axios");
+require("dotenv").config();
+
+const app = express(); // Create an Express application
+const db = require("./database.js"); // Load DB Logic
+const jwt = require("./jwt.js")
+
+var corsOptions = { origin: ["http://localhost:1337"] };
+
+// Middleware
+app.use(cors(corsOptions)); // Enable CORS with the specified options
+app.use(express.json()); // Parse JSON-formatted incoming requests
+app.use(express.urlencoded({ extended: true })); // Parse URL-encoded incoming requests with extended syntax
+
+// Redirect user to Webflow Authorization screen
+app.get("/authorize", (req, res) => {
+
+    const authorizeUrl = WebflowClient.authorizeURL({
+        scope: ["sites:read","authorized_user:read"],
+        clientId: process.env.WEBFLOW_CLIENT_ID,
+    })
+    res.redirect(authorizeUrl)
+})
+
+// Optional: Redirect root to Webflow Authorization screen
+app.get("/", (req,res) =>{
+    res.redirect("/authorize")
+})
+
+// Exchange the authorization code for an access token and save to DB
+app.get("/callback", async (req, res) => {
+  const { code } = req.query;
+
+  // Get Access Token
+  const accessToken = await WebflowClient.getAccessToken({
+    clientId: process.env.WEBFLOW_CLIENT_ID,
+    clientSecret: process.env.WEBFLOW_CLIENT_SECRET,
+    code: code,
+  });
+
+  // Instantiate the Webflow Client
+  const webflow = new WebflowClient({ accessToken });
+
+  // Get site ID to pair with the authorization access token
+  const sites = await webflow.sites.list();
+  sites.sites.forEach((site) => {
+    db.insertSiteAuthorization(site.id, accessToken);
+  });
+
+  // Redirect URI with first site, can improve UX later for choosing a site
+  // to redirect to
+  const firstSite = sites.sites?.[0];
+  if (firstSite) {
+    const shortName = firstSite.shortName;
+    res.redirect(
+      `https://${shortName}.design.webflow.com?app=${process.env.WEBFLOW_CLIENT_ID}`
+    );
+    return;
+  }
+
+});
+
+// Authenticate Designer Extension User via ID Token
+app.post("/token", async (req, res) => {
+  const token = req.body.idToken; // Get token from request
+
+  // Resolve Session token by makeing a Request to Webflow API
+  const APP_TOKEN = process.env.APP_TOKEN;
+  const options = {
+    method: "POST",
+    url: "https://api.webflow.com/beta/token/resolve",
+    headers: {
+      accept: "application/json",
+      "content-type": "application/json",
+      authorization: `Bearer ${process.env.APP_TOKEN}`,
+    },
+    data: {
+      idToken: token,
+    },
+  };
+  const request = await axios.request(options);
+  const user = request.data;
+
+  // Generate a Session Token
+  const sessionToken = jwt.createSessionToken(user)
+
+  // Respond to user with sesion token
+  res.json({ sessionToken });
+});
+
+// Make authenticated request with user's session token
+app.get("/sites", jwt.authenticateToken ,async (req, res) => {
+  
   try {
-    // Generate the file hash for validation
-    const fileHash = await getFileHashFromUrl(assetUrl);
-    const fileName = assetUrl.split("/").pop();
+    // Initialize Webflow Client and make request to sites endpoint
+    const accessToken = req.accessToken
+    const webflow = new WebflowClient({ accessToken });
+    const data = await webflow.sites.list();
+    console.log(accessToken)
+    // Send the retrieved data back to the client
+    res.json({ data });
+  } catch (error) {
+    console.error("Error handling authenticated request:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
 
-    // Step 1: Initialize the upload
-    const uploadInit = await webflow.assets.create(siteId, {
-      parentFolder: folderId,
-      fileName: fileName + `.jpeg`,
-      fileHash: fileHash,
-    });
-    const { uploadUrl, uploadDetails } = uploadInit;
+// Start the server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Server is running on http://localhost:${PORT}`);
+});
+```
+To handle authorization effectively, you’ll need to store access tokens securely.
 
-    // Create form data for S3 upload
-    const form = new FormData();
+### Import the `database` module into `server.js` 
 
-    // Append all required fields to the form
-    form.append("acl", uploadDetails.acl);
-    form.append("bucket", uploadDetails.bucket);
-    form.append("X-Amz-Algorithm", uploadDetails.xAmzAlgorithm);
-    form.append("X-Amz-Credential", uploadDetails.xAmzCredential);
-    form.append("X-Amz-Date", uploadDetails.xAmzDate);
-    form.append("key", uploadDetails.key);
-    form.append("Policy", uploadDetails.policy);
-    form.append("X-Amz-Signature", uploadDetails.xAmzSignature);
-    form.append("success_action_status", uploadDetails.successActionStatus);
-    form.append("Content-Type", uploadDetails.contentType);
-    form.append("Cache-Control", uploadDetails.cacheControl);
+---
+### Exchange Aauthorization Code for Access Token and store it in the database
+```javascript server.js focus=33:51 mark=33:51
+```
+Update the `/callback` endpoint in `server.js` to exchange the `code` for an `accessToken`. 
 
-    // Append the file to be uploaded
-    const response = await axios.get(assetUrl, { responseType: "stream" });
-    form.append("file", response.data, {
-      filename: fileName,
-      contentType: uploadDetails.contentType,
-    });
-    console.log(response);
+To get a list of Sites that the App is authorized to access, instatiate the `WebflowClient` and call the List Sites endpoint. For each authorized site, use the `db.insertSiteAuthorization` function to store the `siteId` and corresponding `accessToken` in the database for secure, future access.
 
-    // Step 2: Upload to the provided S3 URL
-    const uploadResponse = await axios.post(uploadUrl, form, {
+---
+### Redirect the User to the Designer Extension using a deep link
+```javascript server.js focus=53:64 mark=53:64
+```
+This link allows the user to seamlessly continue within your App in the Webflow Designer. For now, the example below redirects to the first available site, but you could enhance the UX by allowing users to select a specific site before redirecting.
+
+---
+# Integrate JWT for secure session management
+```javascript jwt.js
+```
+With our database configured to handle access tokens, it’s time to implement [JSON Web Tokens (JWT)](https://jwt.org) to securely manage sessions and authenticate requests in the Data Client. 
+
+JWT will enable us to issue session tokens and validate them, allowing for a secure, stateless authentication flow.
+
+---
+## Setting up JWT middleware
+```javascript jwt.js focus=1:2 mark=1:2
+```
+In `jwt.js`, start by importing the `jsonwebtoken` library and your custom `database` module. These imports will allow you to handle JWT creation and validation, as well as access and store authorization data in your database.
+
+---
+### Retrieve the Access Token based on the Site ID
+```javascript jwt.js focus=5:25 mark=5:25
+```
+
+Create the `retrieveAccessToken` function to obtain the Access Token associated with a given `siteId` using the `db.getAccssTokenFromSiteId` function we created in our database module.
+
+When the Designer Extension passes a `siteId` and `idToken` to our `/token` endpoint in the Data Client, we'll use this middleware to retreive the Access Token associated with the `siteId` and attach it to the request object. This way, subsequent steps in the endpoint have access to the token, allowing the Data Client to securely interact with Webflow’s API.
+
+---
+### Create the Session Token from User Data
+```javascript jwt.js focus=27:36 mark=27:36
+```
+
+The `createSessionToken` function generates a session token using JWT based on user data from the resolved `idToken`. 
+
+This `sessionToken`, which includes the user’s details, will later be verified for secure access. The token is set to expire after a defined time (in this example, 24 hours), ensuring that the session remains secure and temporary.
+
+---
+### Authenticate the Session Token to Validate User Access on Each Request
+```javascript jwt.js focus=38:72 mark=388:72
+```
+The `authenticateSessionToken` function is middleware that validates the `sessionToken` provided in the authorization header of each request. By verifying the `sessionToken`, this function ensures that only authorized users can access protected routes. Upon successful validation, it retrieves the `accessToken` for the user and attaches it to the request, allowing further secure interactions with Webflow. 
+
+Export these functions once they are ready.
+
+---
+## Using JWT middleware in the server
+```javascript server.js
+const express = require("express");
+const cors = require("cors");
+const { WebflowClient } = require("webflow-api");
+const axios = require("axios");
+require("dotenv").config();
+
+const app = express(); // Create an Express application
+const db = require("./database.js"); // Load DB Logic
+const jwt = require("./jwt.js")
+
+var corsOptions = { origin: ["http://localhost:1337"] };
+
+// Middleware
+app.use(cors(corsOptions)); // Enable CORS with the specified options
+app.use(express.json()); // Parse JSON-formatted incoming requests
+app.use(express.urlencoded({ extended: true })); // Parse URL-encoded incoming requests with extended syntax
+
+// Redirect user to Webflow Authorization screen
+app.get("/authorize", (req, res) => {
+
+    const authorizeUrl = WebflowClient.authorizeURL({
+        scope: ["sites:read","authorized_user:read"],
+        clientId: process.env.WEBFLOW_CLIENT_ID,
+    })
+    res.redirect(authorizeUrl)
+})
+
+// Optional: Redirect root to Webflow Authorization screen
+app.get("/", (req,res) =>{
+    res.redirect("/authorize")
+})
+
+// Exchange the authorization code for an access token and save to DB
+app.get("/callback", async (req, res) => {
+  const { code } = req.query;
+
+  // Get Access Token
+  const accessToken = await WebflowClient.getAccessToken({
+    clientId: process.env.WEBFLOW_CLIENT_ID,
+    clientSecret: process.env.WEBFLOW_CLIENT_SECRET,
+    code: code,
+  });
+
+  // Instantiate the Webflow Client
+  const webflow = new WebflowClient({ accessToken });
+
+  // Get site ID to pair with the authorization access token
+  const sites = await webflow.sites.list();
+  sites.sites.forEach((site) => {
+    db.insertSiteAuthorization(site.id, accessToken);
+  });
+
+  // Redirect URI with first site, can improve UX later for choosing a site
+  // to redirect to
+  const firstSite = sites.sites?.[0];
+  if (firstSite) {
+    const shortName = firstSite.shortName;
+    res.redirect(
+      `https://${shortName}.design.webflow.com?app=${process.env.WEBFLOW_CLIENT_ID}`
+    );
+    return;
+  }
+
+  // Send Auth Complete Screen with Post Message
+  const filePath = path.join(__dirname, "public", "authComplete.html");
+  res.sendFile(filePath);
+});
+
+// Authenticate Designer Extension User via ID Token
+app.post("/token", jwt.retrieveAccessToken, async (req, res) => {
+  const token = req.body.idToken; // Get token from request
+
+  // Resolve ID token by making a request to Webflow API
+  let sessionToken;
+  try {
+    const options = {
+      method: "POST",
+      url: "https://api.webflow.com/beta/token/resolve",
       headers: {
-        ...form.getHeaders(),
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${req.accessToken}`,
       },
+      data: {
+        idToken: token,
+      },
+    };
+    const request = await axios.request(options);
+    const user = request.data;
+
+    // Generate a Session Token
+    const tokenPayload = jwt.createSessionToken(user);
+    sessionToken = tokenPayload.sessionToken;
+    const expAt = tokenPayload.exp;
+    db.insertUserAuthorization(user.id, req.accessToken);
+    // Respond to user with sesion token
+    res.json({ sessionToken, exp: expAt });
+  } catch (e) {
+    console.error(
+      "Unauthorized; user is not associated with authorization for this site",
+    );
+    res.status(401).json({
+      error: "Error: User is not associated with authorization for this site",
     });
+  }
+});
 
-    if (uploadResponse.status === 201) {
-      console.log(`Successfully uploaded ${fileName} to Webflow.`);
-    } else {
-      console.error(
-        `Failed to upload ${fileName}. Response status: ${uploadResponse.status}`
-      );
-    }
+// Make authenticated request with user's session token
+app.get("/sites", jwt.authenticateSessionToken, async (req, res) => {
+  try {
+    // Initialize Webflow Client and make request to sites endpoint
+    const accessToken = req.accessToken;
+    const webflow = new WebflowClient({ accessToken });
+    const data = await webflow.sites.list();
+    // Send the retrieved data back to the client
+    res.json({ data });
   } catch (error) {
-    console.error(`Error uploading asset from ${assetUrl}:`, error);
+    console.error("Error handling authenticated request:", error);
+    res.status(500).json({ error: "Internal server error" });
   }
-}
+});
 
-// Main function to execute the folder creation and asset upload
-(async () => {
-  const siteId = process.env.SITE_ID;
 
-  for (const { folderName, assets } of assetDetails) {
-    const folderId = await createAssetFolder(siteId, folderName);
-    if (folderId) {
-      for (const assetUrl of assets) {
-        await uploadAsset(siteId, folderId, assetUrl);
-      }
-    }
-  }
-})();
+// Start the server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Server is running on http://localhost:${PORT}`);
+});
 ```
+Once the JWT functions are set up, the next step is to import them into `server.js` to securely manage session tokens and authenticate requests.
 
-Now that we have set up the necessary folders, defined the files, and implemented the file hashing logic, it's time to upload these assets to Webflow. This process consists of two main steps:
-
-1. **Update Metadata to Webflow:** Send metadata to Webflow to initiate the upload. Webflow will respond with the necessary details to proceed with uploading the file to Amazon S3.
-2. **Upload the File to S3:** Use the provided URL and Amazon headers to upload the actual file to Amazon S3.
+---
+###  Import JWT Middleware Functions
+```javascript server.js focus=9 mark=9
+```
+At the beginning of `server.js`, import the the JWT middleware.
 
 ---
 
-### 1. Create `uploadAsset()` function
-```js assets.js focus=90:91 mark=90:91
+### Update the `/token` endpoint to authenticate the Designer Extension user
+```javascript server.js focus=69:95 mark=69:95
+
 ```
-Define an asynchronous function called `uploadAsset()` that takes the following arguments: `siteId`, `folderId`, and `assetUrl`.
+
+Now that you’ve set up the JWT and database functions, you can update the `/token` endpoint in `server.js` to securely authenticate the user. This endpoint will:
+
+1. Retrieve the `accessToken` associated with the user's `siteId`
+2. Get user details from the resolved `idToken`
+3. Generate a Session Token from user details
+4. Store the authorization details
+
+See the steps below for more detail.
+
+---
+#### 1. Retrieve the `accessToken` associated with the user's `siteId`
+```javascript server.js focus=70 mark=70
+```
+The `jwt.retrieveAccessToken` middleware fetches the `accessToken` associated with the `siteId` and attaches it to the request, ensuring secure access for the Webflow API call.
+
+---
+#### 2. Get user details from the resolved `idToken`
+```javascript server.js focus=73:89 mark=73:89
+```
+Using the `accessToken`, this endpoint sends an authenticated request to Webflow’s [Resolve ID Token endpoint](https://docs.developers.webflow.com/data/v2.0.0-beta/reference/resolve-1), which validates the `idToken` received from the Designer Extension, and returns the following user details: `id`, `email`, `firstName`, and `lastName`.
+
+---
+#### 3. Generate a Session Token
+```javascript server.js focus=91:106 mark=91:106
+```
+With the newly obtained user information, the `jwt.createSessionToken` function creates a Session Token for the authenticated user, establishing a secure, temporary access session.
+
+---
+#### 4. Store Authorization Details
+```javascript server.js focus=95 mark=95
+```
+Finally, the retrieved `accessToken` is stored in the database and associated with the `userId` using `db.insertUserAuthorization`, enabling easy access and authorization for subsequent requests
 
 ---
 
-### 2. Get file hash and file name
-```js assets.js focus=92:95 mark=94:95
+## Create a protected endpoint for authenticated Webflow requests
+
+```javascript server.js focus=108:122
+
 ```
-Use the `getFileHashFromUrl()` function to generate the file hash. Extract the file name from the URL.
+
+To demonstrate how to make secure, protected requests, let's set up an endpoint that requires a Session Token for access. We'll create a new `/sites` endpoint that will:
+
+1. Authenticate the Session Token
+2. Access Webflow data in the Data Client
+3. Return Webflow data to the Designer Extension
+---
+### 1. **Authenticate the Session Token**
+```javascript server.js focus=109
+
+```
+This endpoint will use `jwt.authenticateSessionToken` middleware to verifiy the session token passed with the request, ensuring that only authorized users can access this endpoint. Once authenticated, the middleware retrieves the user's associated `accessToken` and attaches it to the request.
+---
+### 2. **Access Webflow Data in the Data Client**
+```javascript server.js focus=110:114
+
+```
+The Data Client then uses the `accessToken` attached to the request to initialize the Webflow client and fetch data from Webflow’s [List Sites endpoint.](https://docs.developers.webflow.com/data/v2.0.0-beta/reference/list-sites-1)
 
 ---
+### 3. **Return Webflow Data to the Designer Extension**
+```javascript server.js focus=115:116
 
-#### 3. Upload Metadata to Webflow
-```js assets.js focus=97:104 mark=97:104
 ```
-Use the [`webflow.assets.create()`](https://developers.webflow.com/data/reference/assets/assets/create) method to send the `parentFolder`, `fileName,` and `fileHash` to Webflow. 
-
-The response from Webflow includes:
-- `uploadUrl`: The Amazon S3 URL to upload the file.
-- `uploadDetails`: Amazon-specific headers and parameters required for the file upload.
+After retrieving the data, the endpoint responds with the information, providing the user access to their Webflow sites in the Designer Extension.
 
 ---
-
-### 4. Prepare form data for Amazon S3 upload
-```js assets.js focus=105:128 mark=105:128
-```
-Use the `FormData` library to create a form object needed for the Amazon S3 upload
-
-Refer to the [Amazon S3 Upload Documentation](https://docs.aws.amazon.com/AmazonS3/latest/dev/UsingRESTAPImpUpload.html) for more details on each parameter.
-
-#### Append Amazon S3 Headers
-Append the required Amazon S3 headers from `uploadDetails` to the form. These headers are provided by Webflow and are necessary for the upload authorization.
-
-#### Append File Data
-Fetch the file using **axios** with a `responseType` of stream to handle large files efficiently. Append the file to the form data.
-
----
-
-### 5. Upload to Amazon S3
-```js assets.js focus=129:147 mark=129:147
-```
- Use **axios** to make a POST request to the provided `uploadUrl`. The URL, along with the specific headers from `uploadDetails`, allows the file to be uploaded directly to AWS S3.
-
----
-
-## Call the main function
-```js assets.js focus=90:146
-```
-Now that we have defined all the necessary functions (`createAssetFolder`, `getFileHashFromUrl`, and `uploadAsset`), it's time to call the main function and complete the process of uploading assets to Webflow.
-
----
-
-### 1. Update the main function
-In `assets.js`, make sure the main function is properly set up to create the asset folders and upload the files. Update it to include the `uploadAsset() ` function call for each asset URL.
-
-This will:
-
-- Iterate through each folder in assetDetails.
-- Create the folder in Webflow if it doesn't already exist.
-- Upload each asset to the corresponding folder using the uploadAsset() function.
-
---- 
-
-### 2. Run the script
-To execute the script and upload the assets, simply run `assets.js` using Node.js in the terminal:
+## Start your App and test your authentication flow
+You're all set up to securely make calls to the Webflow Data API from a Designer Extension. To test out your App, run the following command to get started:
 
 <div className="code-container">
-  <code id="code-block">
-    $ node assets.js
-  </code>
+  <code id="code-block">$ npm run dev</code>
   <button className="copy-button" onClick={copyCode}><svg data-wf-icon="DuplicateOutlineIcon" width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path fillRule="evenodd" clipRule="evenodd" d="M6 3C6 2.44772 6.44772 2 7 2H13C13.5523 2 14 2.44772 14 3V9C14 9.55228 13.5523 10 13 10H7C6.44772 10 6 9.55228 6 9V3ZM7 3H13V9H7V3Z" fill="currentColor"></path><path d="M3 5V12C3 12.5523 3.44772 13 4 13H11V12H4V5H3Z" fill="currentColor"></path></svg></button>
 </div>
 
+Once your App is up and running: 
+
+1. **Set Your Callback URI**: Update the Webflow dashboard with the correct callback URI to ensure the OAuth flow can return to your app after authentication.
+2. **Open your App in the Designer**: Open a site in the Designer and open your test App with the corresponding `CLIENT_ID`
+2. **Authorize in the Designer Extension**: Open your Designer Extension and click the "Authorize" button to initiate the authentication flow.
+
 ---
+## Congratulations!
 
-### 3. Verify successful upload
-If everything is configured correctly, you should see output in the terminal that indicates the successful creation of folders and uploads of assets. Additionally, you can open the [Assets Panel](https://help.webflow.com/hc/en-us/articles/33961269934227-Assets-panel#how-to-add-assets) in the Webflow designer to see your newly created assets.
+You have a working Hybrid app that can securely make requests to Webflow’s Data APIs. 
 
+## Next steps
 
-If there are any errors (e.g., issues with the API token, invalid URLs, or upload failures), they will be logged in the console, providing useful feedback to troubleshoot.
+#### [Add Elements to the Canvas in bulk](https://docs.developers.webflow.com/designer/reference/bulk-add-elements)
+
+Create and manpulate complex hierarchical designs using the ElementBuilder APIs.
+
+#### [Add Custom Code to a Site](https://docs.developers.webflow.com/data/docs/working-with-custom-codes)
+
+Learn how to register, apply, and manage custom scripts on a site or page using the Data APIs.
+
+#### [Publish your Hybrid App](https://docs.developers.webflow.com/data/docs/publishing-your-app)
+
+Once you've finished developing your app, discover how to publish it and share it in the marketplace.
+
 
 </CH.Scrollycoding>
