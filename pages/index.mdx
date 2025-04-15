@@ -1192,13 +1192,18 @@ To demonstrate how to make secure, protected requests, let's set up an endpoint 
 1. Authenticate the Session Token
 2. Access Webflow data in the Data Client
 3. Return Webflow data to the Designer Extension
+
 ---
+
 ### 1. **Authenticate the Session Token**
 ```javascript server.js focus=109
 
 ```
+
 This endpoint will use `jwt.authenticateSessionToken` middleware to verifiy the session token passed with the request, ensuring that only authorized users can access this endpoint. Once authenticated, the middleware retrieves the user's associated `accessToken` and attaches it to the request.
+
 ---
+
 ### 2. **Access Webflow Data in the Data Client**
 ```javascript server.js focus=110:114
 
